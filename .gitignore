@@ -1,0 +1,54 @@
+# CMake and local build trees
+/build*/
+/cmake-build-*/
+/out/
+/dist/
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+cmake_install.cmake
+compile_commands.json
+install_manifest.txt
+
+# Compiler, linker, test, and coverage output
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+/libanytls.a
+/tests/test_protocol
+
+# Downloaded routing databases and checksums
+/data/geoip/*.dat*
+/data/geosite/*.dat*
+
+# Runtime and local configuration
+*.log
+*.jsonl
+*.pid
+*.local.conf
+.env
+.env.*
+core
+core.*
+
+# Editor and OS metadata
+.cache/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+__pycache__/
+*.py[cod]
+.xmake
