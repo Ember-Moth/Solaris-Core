@@ -84,6 +84,15 @@ target("core")
     end
     set_basename("core")
     set_languages("c11", "c++17")
+    set_optimize("fastest")
+    on_config(function (target)
+        if target:is_plat("android") then
+            local runtimes = get_config("runtimes") or get_config("ndk_cxxstl")
+            if runtimes ~= "c++_shared" then
+                raise("Android builds must use --runtimes=c++_shared to match the CMake/NDK runtime contract.")
+            end
+        end
+    end)
     add_files("src/library.c", "src/engine.c")
     add_files(core_sources)
     add_files(protocol_sources)
@@ -102,7 +111,12 @@ target("core")
 
     if not is_plat("windows") then
         add_defines("_POSIX_C_SOURCE=200809L", "_DEFAULT_SOURCE")
+    end
+    if is_plat("linux") then
         add_links("pthread", "dl")
+    elseif is_plat("android") then
+        set_runtimes("c++_shared")
+        add_links("dl")
     end
     if is_plat("windows") then
         add_links("psapi", "ws2_32")
@@ -110,6 +124,7 @@ target("core")
 
     if is_plat("android") then
         add_ldflags("-Wl,-z,max-page-size=16384", {force = true})
+        add_shflags("-Wl,-z,max-page-size=16384", {force = true})
     end
 
     if has_config("enable_tun") then

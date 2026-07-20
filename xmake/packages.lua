@@ -167,6 +167,7 @@ set_languages("c11")
 
 target("lwip")
     set_kind("static")
+    set_optimize("fastest")
     add_includedirs("src/include", "port", {public = true})
 %s
     if is_plat("linux") then

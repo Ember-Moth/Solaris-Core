@@ -52,7 +52,7 @@ xmake install -o build/install
 Android 示例：
 
 ```sh
-xmake f -p android -a arm64-v8a --ndk="$ANDROID_NDK_HOME" -m release
+xmake f -p android -a arm64-v8a --ndk="$ANDROID_NDK_HOME" --runtimes=c++_shared -m release
 xmake
 ```
 
