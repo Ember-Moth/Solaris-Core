@@ -14,9 +14,10 @@ typedef struct anytls_outbound_config anytls_outbound_config_t;
 typedef struct shadowsocks_outbound_config shadowsocks_outbound_config_t;
 typedef struct vless_outbound_config vless_outbound_config_t;
 
-#if defined(_WIN32) && defined(APROXY_BUILDING_LIBRARY)
+#if defined(_WIN32) && defined(APROXY_BUILDING_LIBRARY) && \
+    !defined(APROXY_HIDE_LIBRARY_EXPORTS)
 #define APROXY_API __declspec(dllexport)
-#elif defined(_WIN32)
+#elif defined(_WIN32) && defined(APROXY_USING_LIBRARY_DLL)
 #define APROXY_API __declspec(dllimport)
 #else
 #define APROXY_API

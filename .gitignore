@@ -38,8 +38,8 @@ install_manifest.txt
 *.local.conf
 .env
 .env.*
-core
-core.*
+/core
+/core.*
 
 # Editor and OS metadata
 .cache/

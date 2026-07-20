@@ -345,12 +345,18 @@ else()
     add_library(aproxy SHARED src/library.c src/engine.c ${APROXY_CORE_SOURCES})
 endif()
 add_library(Solaris::core ALIAS aproxy)
-target_compile_definitions(aproxy PRIVATE APROXY_BUILDING_LIBRARY)
+target_compile_definitions(aproxy PRIVATE
+    APROXY_BUILDING_ENGINE
+    APROXY_BUILDING_LIBRARY
+    APROXY_HIDE_LIBRARY_EXPORTS)
 target_compile_options(aproxy PRIVATE ${APROXY_WARNING_OPTIONS})
 target_include_directories(aproxy PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
     PRIVATE src src/framework third_party/blake3)
+if(WIN32 AND NOT APPLE)
+    target_sources(aproxy PRIVATE src/core.def)
+endif()
 if(APPLE)
     target_compile_definitions(aproxy PRIVATE ${APROXY_BLAKE3_DEFINITIONS})
     target_link_libraries(aproxy PRIVATE
@@ -402,17 +408,42 @@ if(WIN32)
     target_link_libraries(aproxy PRIVATE psapi ws2_32)
 endif()
 set_target_properties(aproxy PROPERTIES
+    C_VISIBILITY_PRESET hidden
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
     EXPORT_NAME core
     OUTPUT_NAME core
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION_MAJOR}
-    WINDOWS_EXPORT_ALL_SYMBOLS ON
+    WINDOWS_EXPORT_ALL_SYMBOLS OFF
     LINKER_LANGUAGE CXX)
+if(UNIX AND NOT APPLE)
+    target_link_options(aproxy PRIVATE
+        "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/solaris-core.map"
+        "LINKER:--no-undefined")
+endif()
 if(ANDROID)
     # Every PT_LOAD segment must be compatible with Android devices using a
     # 16 KiB kernel page size. NDK r28+ also applies this by default, but keep
     # the contract explicit so custom toolchains cannot silently regress it.
     target_link_options(aproxy PRIVATE "LINKER:-z,max-page-size=16384")
+endif()
+
+option(SOLARIS_BUILD_TESTS "Build Solaris Core ABI smoke tests"
+    ${PROJECT_IS_TOP_LEVEL})
+if(SOLARIS_BUILD_TESTS)
+    include(CTest)
+    if(BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
+        add_executable(solaris_abi_smoke tests/abi_smoke.c)
+        target_link_libraries(solaris_abi_smoke PRIVATE Solaris::core)
+        add_test(NAME solaris_abi_smoke COMMAND solaris_abi_smoke)
+        if(UNIX AND NOT APPLE)
+            add_test(NAME solaris_core_exports
+                COMMAND ${CMAKE_COMMAND}
+                    -DCORE_LIBRARY=$<TARGET_FILE:aproxy>
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyCoreExports.cmake")
+        endif()
+    endif()
 endif()
 
 include(GNUInstallDirs)

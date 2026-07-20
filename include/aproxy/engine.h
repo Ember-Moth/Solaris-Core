@@ -10,8 +10,12 @@ extern "C" {
 
 #define APROXY_ENGINE_ABI_VERSION 2u
 
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(APROXY_BUILDING_ENGINE)
 #define APROXY_ENGINE_EXPORT __declspec(dllexport)
+#elif defined(_WIN32) && defined(APROXY_USING_ENGINE_DLL)
+#define APROXY_ENGINE_EXPORT __declspec(dllimport)
+#elif defined(_WIN32)
+#define APROXY_ENGINE_EXPORT
 #else
 #define APROXY_ENGINE_EXPORT __attribute__((visibility("default")))
 #endif

@@ -93,6 +93,15 @@ target("core")
             end
         end
     end)
+    on_load(function (target)
+        if target:is_plat("linux", "android", "windows") then
+            local libuv = target:pkg("solaris-libuv")
+            if libuv then
+                local filename = target:is_plat("windows") and "uv_a.lib" or "libuv.a"
+                target:add("shflags", path.join(libuv:installdir(), "lib", filename), {force = true})
+            end
+        end
+    end)
     add_files("src/library.c", "src/engine.c")
     add_files(core_sources)
     add_files(protocol_sources)
@@ -101,7 +110,10 @@ target("core")
     add_includedirs("src", "src/framework", "third_party/blake3")
     add_headerfiles("include/(solaris/core.h)")
     add_headerfiles("include/(aproxy/engine.h)")
-    add_defines("APROXY_BUILDING_LIBRARY")
+    add_defines(
+        "APROXY_BUILDING_ENGINE",
+        "APROXY_BUILDING_LIBRARY",
+        "APROXY_HIDE_LIBRARY_EXPORTS")
     add_packages(
         "solaris-boringssl",
         "solaris-libuv",
@@ -111,6 +123,14 @@ target("core")
 
     if not is_plat("windows") then
         add_defines("_POSIX_C_SOURCE=200809L", "_DEFAULT_SOURCE")
+        add_cflags("-fvisibility=hidden", {tools = {"clang", "gcc"}})
+        add_cxxflags("-fvisibility=hidden", "-fvisibility-inlines-hidden", {tools = {"clang", "gcc"}})
+    end
+    if is_plat("linux", "android") then
+        add_shflags(
+            "-Wl,--version-script=" .. path.join(os.projectdir(), "cmake/solaris-core.map"),
+            "-Wl,--no-undefined",
+            {force = true})
     end
     if is_plat("linux") then
         add_links("pthread", "dl")
@@ -119,6 +139,7 @@ target("core")
         add_links("dl")
     end
     if is_plat("windows") then
+        add_files("src/core.def")
         add_links("psapi", "ws2_32")
     end
 
@@ -179,4 +200,11 @@ target("minimal_host")
     set_default(false)
     set_languages("c11")
     add_files("examples/minimal_host.c")
+    add_deps("core")
+
+target("abi_smoke")
+    set_kind("binary")
+    set_default(false)
+    set_languages("c11")
+    add_files("tests/abi_smoke.c")
     add_deps("core")

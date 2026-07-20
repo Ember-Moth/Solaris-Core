@@ -132,10 +132,7 @@ cmake -S "$ROOT_DIR" -B "$CORE_BUILD" -GNinja \
 cmake --build "$CORE_BUILD" --target aproxy
 
 rm -rf "$OUTPUT_DIR"
-mkdir -p "$OUTPUT_DIR/include" "$OUTPUT_DIR/lib"
-cp -R "$ROOT_DIR/include/." "$OUTPUT_DIR/include/"
-cp -R "$CORE_BUILD/_deps/aproxy_libuv-src/include/." "$OUTPUT_DIR/include/"
-cp "$CORE_BUILD/libcore.so" "$OUTPUT_DIR/lib/"
+cmake --install "$CORE_BUILD"
 case "$STRIP_MODE" in
     strip|objcopy)
         "$STRIP_TOOL" --strip-unneeded "$OUTPUT_DIR/lib/libcore.so"

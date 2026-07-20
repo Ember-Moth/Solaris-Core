@@ -1,0 +1,6 @@
+SOLARIS_CORE_0.1 {
+    global:
+        aproxy_engine_get_api;
+    local:
+        *;
+};

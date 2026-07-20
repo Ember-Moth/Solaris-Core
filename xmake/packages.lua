@@ -43,7 +43,8 @@ package("solaris-libuv")
     add_versions("1.50.0-solaris", "8fb9cb919489a48880680a56efecff6a7dfb4504")
 
     on_load(function (package)
-        package:add("links", "uv_a")
+        package:add("linkdirs", package:installdir("lib"))
+        package:add("links", package:is_plat("windows") and "uv_a" or "uv")
     end)
 
     on_install(function (package)
