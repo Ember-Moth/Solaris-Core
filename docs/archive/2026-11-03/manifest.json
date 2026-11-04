@@ -1,0 +1,143 @@
+{
+  "archived_on": "2026-11-03",
+  "timezone": "America/Los_Angeles",
+  "implementation_baseline": "f9ca89ac3cf13808463beac9b4130d6639ffb1c7",
+  "note": "Historical snapshots; added archive notices and rebased Markdown links only. Missing pre-existing links are rendered as historical text.",
+  "documents": [
+    {
+      "original_path": "README.md",
+      "archive_path": "docs/archive/2026-11-03/PROJECT_README.md",
+      "original_sha256": "aa7c33da1ffd229eb36dfaa4e9defc849bc362ee91ef4951f3d001817144ed8d",
+      "archived_sha256": "8b267299ec85a1fecac6523edbdbc2e4470f2b814abf47080c37a03530ddf450",
+      "link_rewrites": [
+        {
+          "from": "docs/MIHOMO_LIBRARY_DESIGN.md",
+          "to": "MIHOMO_LIBRARY_DESIGN.md"
+        },
+        {
+          "from": "docs/FRAMEWORK_ARCHITECTURE.md",
+          "to": "FRAMEWORK_ARCHITECTURE.md"
+        },
+        {
+          "from": "../docs/PROJECT_STATUS.md",
+          "to": null,
+          "reason": "target missing before archive"
+        }
+      ]
+    },
+    {
+      "original_path": "docs/EMBEDDING.md",
+      "archive_path": "docs/archive/2026-11-03/EMBEDDING.md",
+      "original_sha256": "c812717a9787ad26c05ff72ba70df9e480ed5a0da8fe3d3120497e7cf9bfa505",
+      "archived_sha256": "6c12c6351a1e980b33db51b6ffaa5ada4d90a4ec5d6bbf0602a68ba59f2a3401",
+      "link_rewrites": []
+    },
+    {
+      "original_path": "docs/MIHOMO_LIBRARY_DESIGN.md",
+      "archive_path": "docs/archive/2026-11-03/MIHOMO_LIBRARY_DESIGN.md",
+      "original_sha256": "c6ff02a54edfa3267c194e0f9ac51078f5f6eff3b40925f2c72bffcfa8a65aed",
+      "archived_sha256": "92b2ecba0b55b3b95e7d41aa7f200068c4344da9d6707991049844d4e76e85f0",
+      "link_rewrites": [
+        {
+          "from": "../src/engine.c",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/src/engine.c"
+        },
+        {
+          "from": "../src/framework/router.c",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/src/framework/router.c"
+        },
+        {
+          "from": "../src/framework/dns.c",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/src/framework/dns.c"
+        },
+        {
+          "from": "../src/framework/packet_tcp_relay.c",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/src/framework/packet_tcp_relay.c"
+        },
+        {
+          "from": "../xmake.lua",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/xmake.lua"
+        }
+      ]
+    },
+    {
+      "original_path": "docs/FRAMEWORK_ARCHITECTURE.md",
+      "archive_path": "docs/archive/2026-11-03/FRAMEWORK_ARCHITECTURE.md",
+      "original_sha256": "7c10eb18bd652dc1b2fd15f14781e4a298110cd1b8355aab71dd0970779da707",
+      "archived_sha256": "feee80882b1e8642483121f72814f021d5f7ae6aa097c1972c6d5b9227dffea0",
+      "link_rewrites": []
+    },
+    {
+      "original_path": "docs/UDP_NAT_DESIGN.md",
+      "archive_path": "docs/archive/2026-11-03/UDP_NAT_DESIGN.md",
+      "original_sha256": "ac9005621b5b4024bc07ec6887095f4e2ca18c8299c89d44ab610ed7d03aa503",
+      "archived_sha256": "11d42457f54dcbd064dc40001cea6335bd9fe871c213ff37107b4eff2a15403d",
+      "link_rewrites": [
+        {
+          "from": "../src/framework/packet_session.c",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/src/framework/packet_session.c"
+        },
+        {
+          "from": "../src/framework/packet_udp_relay.c",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/src/framework/packet_udp_relay.c"
+        },
+        {
+          "from": "../src/inbound/socks5.c",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/src/inbound/socks5.c"
+        },
+        {
+          "from": "../src/framework/direct_outbound.c",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/src/framework/direct_outbound.c"
+        },
+        {
+          "from": "../include/aproxy/packet_flow.h",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/include/aproxy/packet_flow.h"
+        }
+      ]
+    },
+    {
+      "original_path": "docs/RUNTIME_CONCURRENCY_DESIGN.md",
+      "archive_path": "docs/archive/2026-11-03/RUNTIME_CONCURRENCY_DESIGN.md",
+      "original_sha256": "d8861c38eceac76a1e7321b19e12f970635290454af760ad23bca14f75d07971",
+      "archived_sha256": "e36f1bb34a5aaa5c6139901ab16acafc558ba25797baea3c0255865bb7f27bb1",
+      "link_rewrites": [
+        {
+          "from": "../src/engine.c",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/src/engine.c"
+        },
+        {
+          "from": "../src/tls_uv.c",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/src/tls_uv.c"
+        },
+        {
+          "from": "../src/shadowsocks_outbound.c",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/src/shadowsocks_outbound.c"
+        },
+        {
+          "from": "../src/framework/dns.c",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/src/framework/dns.c"
+        },
+        {
+          "from": "../cmake/mobile/lwip/lwipopts.h",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/cmake/mobile/lwip/lwipopts.h"
+        },
+        {
+          "from": "../src/framework/packet_tcp_relay.c",
+          "to": "https://github.com/Anti-EntropyTech/Solaris-Core/blob/f9ca89ac3cf13808463beac9b4130d6639ffb1c7/src/framework/packet_tcp_relay.c"
+        }
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "original_path": "build-review/udp_nat_probe.c",
+      "archive_path": "docs/archive/2026-11-03/evidence/udp_nat_probe.c",
+      "sha256": "bd9784f20c58735597bf8cbcd6a11565e0c3fa8cbabc8542b215ab89ab908434"
+    },
+    {
+      "original_path": "build-review/udp_nat_probe.json",
+      "archive_path": "docs/archive/2026-11-03/evidence/udp_nat_probe.json",
+      "sha256": "9b74472c94049542793e37d04589ab8bf14740769cc2d6e93124fe4e96181374"
+    }
+  ]
+}

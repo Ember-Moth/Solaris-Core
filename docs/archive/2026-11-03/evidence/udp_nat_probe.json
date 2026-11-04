@@ -1,0 +1,1 @@
+{"peer_packets":[2,1],"egress_source_ports":[58111,57129],"same_destination_reuses_port":true,"cross_destination_reuses_port":false,"relay_sessions":2,"reply_packets":4,"empty_replies":0,"alternate_source_preserved":true,"ipv6_open_status":-7,"ipv6_dispatch_status":-1,"packet_errors":0}

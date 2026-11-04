@@ -1,4 +1,8 @@
+> 历史归档（2026-11-03）：原路径 `docs/EMBEDDING.md`。本文件仅供追溯；当前开发依据见 [开发文档入口](../../README.md)。正文保留归档时状态，链接已按归档位置调整。
+
 # 嵌入 Solaris Core
+
+> 本文描述尚待替换的原实现，供查阅其当前调用方式。全新 Solaris 工程的接口与配置模型以 [总体设计](MIHOMO_LIBRARY_DESIGN.md) 和 [框架架构](FRAMEWORK_ARCHITECTURE.md) 为准；下文的版本、函数表和私有配置格式不构成新项目的兼容要求。
 
 Solaris Core 是一个 C ABI 数据面库。它不创建系统 VPN、不申请权限、不解析分享链接，也不下载
 Geo 数据库；这些职责属于宿主程序。
