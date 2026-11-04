@@ -17,15 +17,22 @@ The upstream license texts are kept in:
 
 ## Linked libraries
 
-The project links to libuv (MIT), BoringSSL (ISC-style and other permissive
+The M0 SDK links only to libuv (MIT). Its source revision and archive checksum
+are fixed in `dependencies/lock.json`; its LICENSE and LICENSE-extra are
+installed with the SDK. The BLAKE3 sources and BoringSSL REALITY patch retained
+in `third_party/` are not linked into M0.
+
+The prior implementation also used BoringSSL (ISC-style and other permissive
 licenses), lwIP (BSD-3-Clause), PCRE2 (BSD-3-Clause), nghttp2 (MIT), and llhttp
-(MIT). Host builds may use libraries supplied by the build environment; mobile
-build scripts fetch pinned source revisions into ignored build directories.
-These libraries are not vendored in this repository.
+(MIT). These sources remain attributable through implementation baseline
+`f9ca89ac3cf13808463beac9b4130d6639ffb1c7`; future modules must carry forward
+the applicable notices when reusing them. Parser selections for subsequent
+stages are recorded in the dependency lock but are not currently linked.
 
 ## hev-socks5-tunnel
 
-Parts of the Linux TUN device setup in `src/inbound/tun.c` are adapted from
+Parts of the prior Linux TUN device setup (`src/inbound/tun.c` at baseline
+`f9ca89ac3cf13808463beac9b4130d6639ffb1c7`) were adapted from
 `heiher/hev-socks5-tunnel`:
 
 https://github.com/heiher/hev-socks5-tunnel

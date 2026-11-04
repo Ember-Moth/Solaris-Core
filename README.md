@@ -2,7 +2,20 @@
 
 Solaris Core 的新开发目标是一个 **兼容 mihomo YAML、可嵌入、可扩展的 C 代理内核库**，宿主集成方式参考 libclash。
 
-当前已建立开发文档基线。仓库中的 C 实现仍是供参考和复用的原实现，新框架、SDK、命名清理及多 worker 运行时尚未开始落地；不能将原实现的构建结果视为新设计已经通过验收。
+当前源码提供 M0 的新工程骨架和基础 C SDK：异步启停、操作事件、状态快照、完成屏障与安全销毁。旧框架已从源码树移除，保留在 Git 历史中供后续按模块复用。当前只有一个控制 worker，尚未实现 YAML、代理协议或 TUN 数据面。
+
+## 构建基础 SDK
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --config Debug --parallel
+ctest --test-dir build --build-config Debug --output-on-failure
+cmake --install build --config Debug --prefix "$PWD/build/install"
+```
+
+需要 CMake 3.24+ 和 C11 编译器，测试还需要 Python 3.9+ 与 C++11 编译器。默认共享库，静态构建添加 `-DBUILD_SHARED_LIBS=OFF`。首次配置下载并校验固定的 libuv 1.53.0。
+
+安装后使用 `find_package(Solaris CONFIG REQUIRED)` 与 `Solaris::core`。可调用接口和回调/销毁约定见 [当前 SDK 用法](docs/development/SDK.md)；构建与依赖取舍见 [M0 决策](docs/development/M0_DECISIONS.md)。
 
 ## 开发入口
 
@@ -16,6 +29,8 @@ Solaris Core 的新开发目标是一个 **兼容 mihomo YAML、可嵌入、可�
 | [UDP 与 NAT](docs/development/UDP_NAT.md) | association、目的映射、通道复用、回复恢复与生命周期 |
 | [测试与验收](docs/development/TESTING.md) | 契约、差分、互通、平台与性能证据 |
 | [开发计划](docs/development/DEVELOPMENT_PLAN.md) | M0–M6、任务编号、依赖、交付物、验收和当前进度 |
+| [当前 SDK](docs/development/SDK.md) | 已实现的 C API、构建、消费和生命周期契约 |
+| [兼容矩阵](docs/development/COMPATIBILITY.md) | 当前支持、未实现和未验证的能力 |
 
 ## 已确定的方向
 

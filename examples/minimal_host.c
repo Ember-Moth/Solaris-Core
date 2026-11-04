@@ -1,59 +1,28 @@
-#include <stdio.h>
-#include <string.h>
-
 #include <solaris/core.h>
+#include <stdio.h>
 
-static void emit_event(void *context, const aproxy_engine_event_v2_t *event)
+static void on_event(void *context, const solaris_event_t *event)
 {
     (void)context;
-    if (event == NULL || event->message.data == NULL) {
-        return;
-    }
-    printf("event type=%u state=%u op=%llu status=%d message=%.*s\n",
-           event->type,
-           event->state,
+    printf("operation=%llu result=%s state=%u\n",
            (unsigned long long)event->operation_id,
-           event->status,
-           (int)event->message.len,
-           event->message.data);
-}
-
-static int capture_capabilities(void *context, const aproxy_value_t *value)
-{
-    (void)context;
-    if (value == NULL || value->type != APROXY_VALUE_OBJECT) {
-        return -1;
-    }
-    printf("Solaris core capabilities object entries=%zu\n",
-           value->as.object.count);
-    return 0;
+           solaris_status_string(event->status), (unsigned int)event->state);
 }
 
 int main(void)
 {
-    const solaris_core_api_t *api = NULL;
-    int rc = solaris_core_get_api(&api);
-    if (rc != 0 || api == NULL ||
-        api->abi_version != SOLARIS_CORE_ENGINE_ABI_VERSION ||
-        api->struct_size < sizeof(*api)) {
-        fprintf(stderr, "Solaris core API mismatch: %d\n", rc);
-        return 1;
-    }
-
-    solaris_core_host_t host;
-    memset(&host, 0, sizeof(host));
-    host.abi_version = SOLARIS_CORE_ENGINE_ABI_VERSION;
-    host.struct_size = sizeof(host);
-    host.emit_event = emit_event;
-
-    solaris_core_engine_t *engine = NULL;
-    rc = api->create(&host, &engine);
-    if (rc != 0 || engine == NULL) {
-        fprintf(stderr, "Solaris core create failed: %d\n", rc);
-        return 1;
-    }
-
-    rc = api->get_capabilities(engine, capture_capabilities, NULL);
-    api->destroy(engine);
-    return rc == 0 ? 0 : 1;
+    solaris_engine_options_t options;
+    solaris_engine_options_init(&options);
+    solaris_host_t host = {NULL, on_event};
+    solaris_error_t error;
+    solaris_engine_t *engine = NULL;
+    uint64_t operation_id = 0;
+    solaris_status_t rc = solaris_engine_create(&options, &host, &engine, &error);
+    if (rc == SOLARIS_OK) rc = solaris_engine_start(engine, &operation_id, &error);
+    if (rc == SOLARIS_OK) rc = solaris_engine_flush(engine, 5000u, &error);
+    if (rc == SOLARIS_OK) rc = solaris_engine_stop(engine, &operation_id, &error);
+    if (rc == SOLARIS_OK) rc = solaris_engine_flush(engine, 5000u, &error);
+    if (rc != SOLARIS_OK) fprintf(stderr, "%s\n", error.message);
+    const solaris_status_t cleanup = solaris_engine_destroy(engine, NULL);
+    return rc == SOLARIS_OK && cleanup == SOLARIS_OK ? 0 : 1;
 }

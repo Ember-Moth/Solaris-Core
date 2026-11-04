@@ -24,8 +24,6 @@ install_manifest.txt
 *.gcov
 *.profraw
 *.profdata
-/libanytls.a
-/tests/test_protocol
 
 # Downloaded routing databases and checksums
 /data/geoip/*.dat*
@@ -38,8 +36,6 @@ install_manifest.txt
 *.local.conf
 .env
 .env.*
-/core
-/core.*
 
 # Editor and OS metadata
 .cache/
@@ -51,4 +47,4 @@ install_manifest.txt
 .DS_Store
 __pycache__/
 *.py[cod]
-.xmake
+/.xmake/

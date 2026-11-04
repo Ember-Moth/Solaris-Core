@@ -1,3 +1,0 @@
-LIBRARY core
-EXPORTS
-    aproxy_engine_get_api

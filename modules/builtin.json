@@ -1,0 +1,32 @@
+{
+  "modules": [
+    {
+      "name": "sdk",
+      "sources": ["src/api/engine.c", "src/api/error.c", "src/core/version.c"],
+      "dependencies": []
+    },
+    {
+      "name": "runtime",
+      "sources": ["src/runtime/engine.c"],
+      "dependencies": ["libuv"]
+    }
+  ],
+  "public_headers": [
+    "include/solaris/core.h",
+    "include/solaris/engine.h",
+    "include/solaris/error.h",
+    "include/solaris/export.h",
+    "include/solaris/version.h"
+  ],
+  "exports": [
+    "solaris_engine_create",
+    "solaris_engine_destroy",
+    "solaris_engine_flush",
+    "solaris_engine_get_snapshot",
+    "solaris_engine_options_init",
+    "solaris_engine_start",
+    "solaris_engine_stop",
+    "solaris_status_string",
+    "solaris_version_string"
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "libuv": {
+    "version": "1.53.0",
+    "revision": "840404ce8ba7cc0204be52389a6cfff9f2c90fb6",
+    "url": "https://codeload.github.com/libuv/libuv/tar.gz/840404ce8ba7cc0204be52389a6cfff9f2c90fb6",
+    "sha256": "768e567dcabb9a55cb88b552b3e93c723aeca1ea6d8bb9fd8ff573c2623feac3",
+    "stage": "M0"
+  },
+  "libyaml": {
+    "version": "0.2.5",
+    "repository": "https://github.com/yaml/libyaml",
+    "revision": "2c891fc7a770e8ba2fec34fc6b545c672beb37e6",
+    "stage": "M2; selected, not linked in M0"
+  },
+  "yyjson": {
+    "version": "0.12.0",
+    "repository": "https://github.com/ibireme/yyjson",
+    "revision": "8b4a38dc994a110abaec8a400615567bd996105f",
+    "stage": "M2; selected, not linked in M0"
+  },
+  "reference_mihomo": {
+    "repository": "https://github.com/Herta-Network/mihomo",
+    "revision": "9f121787bb563fe655d2789cbf6dbcc7ae19a0c9",
+    "stage": "test reference only"
+  },
+  "reference_libclash": {
+    "repository": "https://github.com/Herta-Network/libclash",
+    "revision": "b158aa82a2bb7af6f6003d134fdb30e819e33635",
+    "stage": "host integration reference only"
+  },
+  "lwip": {
+    "repository": "https://github.com/lwip-tcpip/lwip",
+    "revision": "77dcd25a72509eb83f72b033d219b1d40cd8eb95",
+    "stage": "initial serialized TCP stack candidate; not linked in M0"
+  },
+  "reference_original_core": {
+    "revision": "f9ca89ac3cf13808463beac9b4130d6639ffb1c7",
+    "stage": "implementation provenance; not compiled"
+  }
+}

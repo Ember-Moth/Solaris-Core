@@ -1,6 +1,6 @@
 # Solaris Core 开发文档
 
-基线日期：2026-11-03。状态：开发设计与计划已整理；新工程实现尚未开始。
+基线日期：2026-11-03。新工程已进入 M0，实现与验收状态见开发计划。
 
 ## 阅读顺序与职责
 
@@ -12,6 +12,8 @@
 | 4 | [UDP 与 NAT](development/UDP_NAT.md) | UDP 关联身份、映射、固定选路和回复路径 |
 | 5 | [测试与验收](development/TESTING.md) | 各类验收条件、参考实现与证据要求 |
 | 6 | [开发计划](development/DEVELOPMENT_PLAN.md) | 任务顺序、依赖、完成状态和下一批工作 |
+
+实施配套：[M0 工程决策](development/M0_DECISIONS.md)、[已实现 SDK 用法](development/SDK.md)、[配置/协议/平台兼容矩阵](development/COMPATIBILITY.md)。目标规范不等于当前已支持能力。
 
 ## 文档使用规则
 
