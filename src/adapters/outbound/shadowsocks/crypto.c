@@ -1,5 +1,6 @@
 #include "adapters/outbound/shadowsocks/internal.h"
 #include <openssl/base64.h>
+#include <openssl/aes.h>
 #include <openssl/crypto.h>
 #include <openssl/hkdf.h>
 #include <openssl/md5.h>
@@ -18,16 +19,28 @@ solaris_status_t solaris_ss_key_parse(const char *method, const char *password, 
     else if (strcmp(method, "chacha20-ietf-poly1305") == 0) { key->length = 32u; key->chacha = 1; }
     else if (strcmp(method, "2022-blake3-aes-128-gcm") == 0) { key->length = 16u; key->modern = 1; }
     else if (strcmp(method, "2022-blake3-aes-256-gcm") == 0) { key->length = 32u; key->modern = 1; }
+    else if (strcmp(method, "2022-blake3-chacha20-poly1305") == 0) { key->length = 32u; key->modern = key->chacha = 1; }
     else return SOLARIS_ENOTSUP;
     size_t length = strlen(password);
     if (length == 0u) return SOLARIS_EINVAL;
     if (key->modern) {
-        uint8_t decoded[48]; size_t count = 0u;
-        if (length != ((key->length + 2u) / 3u) * 4u ||
-            !EVP_DecodeBase64(decoded, &count, sizeof(decoded), (const uint8_t *)password, length) || count != key->length) {
-            OPENSSL_cleanse(decoded, sizeof(decoded)); return SOLARIS_EINVAL;
+        const char *part = password;
+        for (;;) {
+            const char *separator = strchr(part, ':');
+            size_t part_length = separator != NULL ? (size_t)(separator - part) : strlen(part);
+            uint8_t decoded[48], canonical[65]; size_t count = 0u;
+            if (part_length != ((key->length + 2u) / 3u) * 4u ||
+                !EVP_DecodeBase64(decoded, &count, sizeof(decoded), (const uint8_t *)part, part_length) || count != key->length ||
+                (size_t)EVP_EncodeBlock(canonical, decoded, count) != part_length || memcmp(canonical, part, part_length) != 0 ||
+                (separator != NULL && (key->chacha || key->identity_count == SOLARIS_SS_MAX_IDENTITIES))) {
+                OPENSSL_cleanse(decoded, sizeof(decoded)); OPENSSL_cleanse(canonical, sizeof(canonical));
+                OPENSSL_cleanse(key, sizeof(*key)); return SOLARIS_EINVAL;
+            }
+            memcpy(separator != NULL ? key->identities[key->identity_count++] : key->bytes, decoded, count);
+            OPENSSL_cleanse(decoded, sizeof(decoded)); OPENSSL_cleanse(canonical, sizeof(canonical));
+            if (separator == NULL) break;
+            part = separator + 1;
         }
-        memcpy(key->bytes, decoded, count); OPENSSL_cleanse(decoded, sizeof(decoded));
     } else {
         uint8_t digest[16]; size_t pos = 0u;
         while (pos < key->length) {
@@ -38,6 +51,31 @@ solaris_status_t solaris_ss_key_parse(const char *method, const char *password, 
             OPENSSL_cleanse(&md5, sizeof(md5));
         }
         OPENSSL_cleanse(digest, sizeof(digest));
+    }
+    return SOLARIS_OK;
+}
+solaris_status_t solaris_ss_identity_headers(const solaris_ss_key_t *key, const uint8_t *salt,
+    const uint8_t *packet_header, uint8_t *out)
+{
+    for (size_t i = 0u; i < key->identity_count; ++i) {
+        uint8_t digest[16], subkey[32]; blake3_hasher hasher; AES_KEY aes;
+        const uint8_t *next = i + 1u < key->identity_count ? key->identities[i + 1u] : key->bytes;
+        blake3_hasher_init(&hasher); blake3_hasher_update(&hasher, next, key->length);
+        blake3_hasher_finalize(&hasher, digest, sizeof(digest));
+        if (packet_header != NULL) {
+            memcpy(subkey, key->identities[i], key->length);
+            for (size_t n = 0u; n < sizeof(digest); ++n) digest[n] ^= packet_header[n];
+        } else {
+            blake3_hasher_init_derive_key(&hasher, "shadowsocks 2022 identity subkey");
+            blake3_hasher_update(&hasher, key->identities[i], key->length);
+            blake3_hasher_update(&hasher, salt, key->length);
+            blake3_hasher_finalize(&hasher, subkey, key->length);
+        }
+        int ok = AES_set_encrypt_key(subkey, (unsigned int)(key->length * 8u), &aes) == 0;
+        if (ok) AES_encrypt(digest, out + 16u * i, &aes);
+        OPENSSL_cleanse(&hasher, sizeof(hasher)); OPENSSL_cleanse(&aes, sizeof(aes));
+        OPENSSL_cleanse(digest, sizeof(digest)); OPENSSL_cleanse(subkey, sizeof(subkey));
+        if (!ok) return SOLARIS_EIO;
     }
     return SOLARIS_OK;
 }

@@ -52,8 +52,22 @@ int main(int argc, char **argv)
         CHECK(ops->decode(codec, expected, size, &consumed, &source, &out) == SOLARIS_OK);
         CHECK(consumed == size && solaris_address_equal(&source, &destination) && solaris_buffer_length(out) == lengths[i]);
         CHECK(memcmp(solaris_buffer_data(out), solaris_buffer_data(payload), lengths[i]) == 0);
-        solaris_buffer_release(out); solaris_buffer_release(payload);
+        solaris_buffer_release(out);
         CHECK(ops->finish(codec) == SOLARIS_OK); ops->destroy(codec);
+        solaris_xudp_parameters_t identity = {{1,2,3,4,5,6,7,8}};
+        for (unsigned int generation = 0u; generation < 2u; ++generation) {
+            CHECK(ops->create(&identity, budget, &codec) == SOLARIS_OK);
+            fail = 1; CHECK(ops->encode(codec, &destination, &plain, &encoded) == SOLARIS_ENOMEM && encoded == NULL); fail = 0;
+            size = load(argv[1], "global", i, expected, sizeof(expected));
+            CHECK(ops->encode(codec, &destination, &plain, &encoded) == SOLARIS_OK);
+            CHECK(solaris_buffer_length(encoded) == size && memcmp(solaris_buffer_data(encoded), expected, size) == 0);
+            solaris_buffer_release(encoded);
+            size = load(argv[1], "frame", i, expected, sizeof(expected));
+            CHECK(ops->encode(codec, &destination, &plain, &encoded) == SOLARIS_OK);
+            CHECK(solaris_buffer_length(encoded) == size && memcmp(solaris_buffer_data(encoded), expected, size) == 0);
+            solaris_buffer_release(encoded); ops->destroy(codec);
+        }
+        solaris_buffer_release(payload);
     }
     void *codec = NULL; CHECK(ops->create(NULL, budget, &codec) == SOLARIS_OK);
     /* No response data can precede the first accepted request. */

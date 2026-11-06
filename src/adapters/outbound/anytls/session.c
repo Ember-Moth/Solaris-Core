@@ -10,6 +10,7 @@ typedef struct anytls_session {
     solaris_anytls_policy_t policy;
     uint32_t packet;
     int settings_sent, server_settings;
+    uint32_t peer_version;
 } anytls_session_t;
 static void frame(uint8_t *p, uint8_t command, uint32_t id, size_t length)
 {
@@ -19,7 +20,10 @@ static void frame(uint8_t *p, uint8_t command, uint32_t id, size_t length)
 static solaris_status_t create(void *parameters, solaris_budget_t *budget, void **out)
 {
     anytls_session_t *s = solaris_memory_allocate(budget, sizeof(*s)); if (s == NULL) return SOLARIS_ENOMEM;
-    memset(s, 0, sizeof(*s)); s->client = parameters; s->policy = s->client->policy; s->budget = budget; *out = s; return SOLARIS_OK;
+    memset(s, 0, sizeof(*s)); s->client = parameters; s->policy = s->client->policy; s->budget = budget;
+    /* A v1 server never sends ServerSettings. The first stream must be usable
+     * before receiving them, including protocols whose server speaks first. */
+    s->peer_version = 1u; *out = s; return SOLARIS_OK;
 }
 static solaris_status_t start(void *state, solaris_session_batch_t *out)
 {
@@ -42,7 +46,7 @@ static solaris_status_t open_stream(void *state, uint32_t id, const solaris_addr
     anytls_session_t *s = state; uint8_t wire[512]; size_t pos = 0u;
     /* UoT has an application preface before the server can acknowledge its
      * destination. Let the datagram layer send that preface after open. */
-    *wait_ack = !(peer->family == SOLARIS_ADDRESS_DOMAIN && peer->port == 0u && strcmp(peer->host, "sp.v2.udp-over-tcp.arpa") == 0);
+    *wait_ack = s->peer_version >= 2u && !(peer->family == SOLARIS_ADDRESS_DOMAIN && peer->port == 0u && strcmp(peer->host, "sp.v2.udp-over-tcp.arpa") == 0);
     if (!s->settings_sent) {
         char settings[128]; int size = snprintf(settings, sizeof(settings), "v=2\nclient=Solaris/0.1.0\npadding-md5=%s", s->policy.md5);
         if (size <= 0 || (size_t)size >= sizeof(settings)) return SOLARIS_EIO;
@@ -74,14 +78,39 @@ static solaris_status_t write_stream(void *state, uint32_t id, const solaris_sli
 }
 static solaris_status_t end_stream(void *state, uint32_t id, solaris_session_batch_t *out)
 { uint8_t wire[7]; frame(wire, FIN, id, 0u); return pad(state, wire, sizeof(wire), out); }
-static int version2(const uint8_t *p, size_t size)
+static int valid_utf8(const uint8_t *p, size_t size)
+{
+    for (size_t i = 0u; i < size;) {
+        uint32_t value = p[i++]; size_t extra; uint32_t minimum;
+        if (value < 128u) { if (value != '\n' && (value < 32u || value == 127u)) return 0; continue; }
+        if (value >= 0xc2u && value <= 0xdfu) { extra = 1u; minimum = 0x80u; value &= 31u; }
+        else if (value >= 0xe0u && value <= 0xefu) { extra = 2u; minimum = 0x800u; value &= 15u; }
+        else if (value >= 0xf0u && value <= 0xf4u) { extra = 3u; minimum = 0x10000u; value &= 7u; }
+        else return 0;
+        if (extra > size - i) return 0;
+        while (extra-- != 0u) { uint8_t next = p[i++]; if ((next & 0xc0u) != 0x80u) return 0; value = value << 6 | (next & 63u); }
+        if (value < minimum || value > 0x10ffffu || (value >= 0xd800u && value <= 0xdfffu)) return 0;
+    }
+    return 1;
+}
+static int server_version(const uint8_t *p, size_t size, uint32_t *version)
 {
     size_t start = 0u; int found = 0;
+    if (!valid_utf8(p, size)) return 0;
     for (size_t i = 0u; i <= size; ++i) {
-        if (i != size && p[i] != '\n') { if (p[i] < 32u || p[i] > 126u) return 0; continue; }
+        if (i != size && p[i] != '\n') continue;
+        if (i == start) { start = i + 1u; continue; }
+        const uint8_t *equal = memchr(p + start, '=', i - start);
+        if (equal == NULL || equal == p + start) return 0;
         if (i - start >= 2u && p[start] == 'v' && p[start + 1u] == '=') {
-            if (found || i - start != 3u || p[start + 2u] != '2') return 0;
-            found = 1;
+            uint32_t v = 0u;
+            if (found || i - start == 2u) return 0;
+            for (size_t j = start + 2u; j < i; ++j) {
+                if (p[j] < '0' || p[j] > '9' || v > (UINT32_MAX - (uint32_t)(p[j] - '0')) / 10u) return 0;
+                v = v * 10u + (uint32_t)(p[j] - '0');
+            }
+            if (v == 0u) return 0;
+            *version = v; found = 1;
         }
         start = i + 1u;
     }
@@ -99,17 +128,19 @@ static solaris_status_t decode(void *state, const uint8_t *wire, size_t size, si
     switch (command) {
     case WASTE: break;
     case PSH:
-        if (id == 0u || !s->server_settings) return SOLARIS_EIO;
+        if (id == 0u) return SOLARIS_EIO;
         event->kind = SOLARIS_SESSION_DATA; rc = solaris_buffer_copy(s->budget, data, length, &event->data); break;
     case FIN:
         if (id == 0u || length != 0u) return SOLARIS_EIO;
         event->kind = SOLARIS_SESSION_END; break;
     case SYNACK:
-        if (id == 0u || !s->server_settings) return SOLARIS_EIO;
+        if (id == 0u || s->peer_version < 2u) return SOLARIS_EIO;
         event->kind = SOLARIS_SESSION_READY; event->status = length == 0u ? SOLARIS_OK : SOLARIS_EACCESS; break;
-    case SERVER_SETTINGS:
-        if (id != 0u || s->server_settings || !version2(data, length)) return SOLARIS_EIO;
-        s->server_settings = 1; break;
+    case SERVER_SETTINGS: {
+        uint32_t version;
+        if (id != 0u || s->server_settings || !server_version(data, length, &version)) return SOLARIS_EIO;
+        s->peer_version = version; s->server_settings = 1; break;
+    }
     case UPDATE_PADDING: {
         if (id != 0u) return SOLARIS_EIO;
         solaris_anytls_policy_t policy;
@@ -118,10 +149,10 @@ static solaris_status_t decode(void *state, const uint8_t *wire, size_t size, si
         break;
     }
     case HEART_REQUEST: {
-        if (length != 0u || !s->server_settings) return SOLARIS_EIO;
+        if (length != 0u || s->peer_version < 2u) return SOLARIS_EIO;
         uint8_t response[7]; frame(response, HEART_RESPONSE, id, 0u); rc = pad(s, response, sizeof(response), &event->reply); break;
     }
-    case HEART_RESPONSE: if (length != 0u || !s->server_settings) return SOLARIS_EIO; break;
+    case HEART_RESPONSE: if (length != 0u || s->peer_version < 2u) return SOLARIS_EIO; break;
     case ALERT:
         if (id != 0u) return SOLARIS_EIO;
         if (s->client->diagnostic.report != NULL)

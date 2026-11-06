@@ -3,6 +3,7 @@
 #include "codec/address/vmess.h"
 #include "codec/uot/codec.h"
 #include "codec/xudp/codec.h"
+#include "codec/ip/packet.h"
 #include "observe/probe/http_codec.h"
 #include "contracts/module/module.h"
 #if SOLARIS_HAS_TLS
@@ -193,9 +194,9 @@ done:
 #if SOLARIS_HAS_SHADOWSOCKS
 static void ss_fuzz(solaris_budget_t *budget, const uint8_t *data, size_t size, unsigned int mode, int packet)
 {
-    const char *methods[] = {"aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm"};
-    unsigned int method = mode % 5u;
-    const char *password = method == 3u ? "SUlJSUlJSUlJSUlJSUlJSQ==" : method == 4u ? "SUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUk=" : "solaris-independent-peer";
+    const char *methods[] = {"aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"};
+    unsigned int method = mode % 6u;
+    const char *password = method == 3u ? "SUlJSUlJSUlJSUlJSUlJSQ==" : method >= 4u ? "SUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUk=" : "solaris-independent-peer";
     solaris_ss_parameters_t parameters = {.source = {.random = fixed_random, .unix_seconds = unix_time}};
     (void)solaris_address_parse("127.0.0.1", 53u, &parameters.destination);
     if (solaris_ss_key_parse(methods[method], password, &parameters.key) != SOLARIS_OK) abort();
@@ -285,11 +286,26 @@ static void socks5_fuzz(solaris_budget_t *budget, const uint8_t *data, size_t si
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     if (size < 3u || size > 196608u) return 0;
-    unsigned int parser = data[0] % 20u, mode = data[1]; fuzz_environment_t environment = {.failure = data[2] & 63u, .random = 1u};
+    unsigned int parser = data[0] % 21u, mode = data[1]; fuzz_environment_t environment = {.failure = data[2] & 63u, .random = 1u};
     data += 3u; size -= 3u;
     solaris_runtime_services_t services; solaris_runtime_services_init(&services); services.context = &environment; services.allocate = allocate;
     solaris_budget_t *budget = NULL; if (solaris_budget_create(8u * 1024u * 1024u, &services, &budget) != SOLARIS_OK) return 0;
     switch (parser) {
+    case 20: {
+        solaris_ip_packet_t packet;
+        if (solaris_ip_parse(data, size, mode & 1u, &packet) == SOLARIS_OK) {
+            assert(packet.payload_offset + packet.payload_length == size);
+            solaris_buffer_t *copy = NULL;
+            if (solaris_buffer_allocate(budget, size, &copy) == SOLARIS_OK) {
+                memcpy(solaris_buffer_mutable_data(copy), data, size);
+                assert(solaris_ip_rewrite(solaris_buffer_mutable_data(copy), size,
+                    &packet.destination, &packet.source) == SOLARIS_OK);
+                assert(solaris_ip_parse(solaris_buffer_data(copy), size, 1, &packet) == SOLARIS_OK);
+                solaris_buffer_release(copy);
+            }
+        }
+        break;
+    }
     case 0: address_fuzz(data, size, 0); break;
     case 1: address_fuzz(data, size, 1); break;
     case 2: datagram_fuzz(budget, &solaris_uot_v2_codec, data, size, mode); break;

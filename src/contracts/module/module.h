@@ -5,6 +5,7 @@
 #include "contracts/io/outbound.h"
 #include "transport/socket/socket.h"
 #include "contracts/io/carrier.h"
+#include "contracts/io/plugin.h"
 #include "contracts/runtime/replay.h"
 #include "contracts/runtime/crypto.h"
 #include "contracts/flow/plan.h"
@@ -23,6 +24,7 @@ typedef struct solaris_module_services {
     /* Optional carrier injection for stream-based modules. Null open uses
      * the physical dialer. Its context outlives every dependent channel. */
     solaris_stream_factory_t carrier;
+    const solaris_stream_plugin_provider_t *stream_plugin;
     /* Shared across workers/configuration generations; channels retain it.
      * Required by protocols with connection-independent replay state. */
     solaris_replay_store_t *replay;

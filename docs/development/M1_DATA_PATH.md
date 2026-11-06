@@ -1,6 +1,6 @@
 # M1：模块工厂、UDP association 与统一 I/O
 
-日期：2026-11-05。本文描述 M1-01–M1-05 及已接入的 TLS/VLESS/SS 边界；阶段状态以 [开发计划](DEVELOPMENT_PLAN.md) 为准。
+日期：2026-11-06。本文描述 M1-01–M1-05 及已接入的 TLS/VLESS/SS 边界；阶段状态以 [开发计划](DEVELOPMENT_PLAN.md) 为准。
 
 ## 协议目录与待交付组合
 
@@ -123,7 +123,9 @@ VLESS `flow` 接受空值、`xtls-rprx-vision` 和 `xtls-rprx-vision-udp443`。�
 
 ## Shadowsocks
 
-`shadowsocks`（别名 `ss`）配置采用 `server`、`port`、`cipher`、`password`、可选布尔字段 `udp-over-tcp` 和公共 dialer 字段。当前支持三种 AEAD 2017 方法（AES-128/256-GCM、ChaCha20-IETF-Poly1305）及 SS 2022 必选的两种 BLAKE3/AES-GCM 方法。2022 password 必须是精确 16/32 字节的 base64 PSK，不对超长密钥做哈希兼容；不接受 EIH、多用户密钥链、插件或 TLS。SS 2022 可选 ChaCha 方法未实现。
+`shadowsocks`（别名 `ss`）配置采用 `server`、`port`、`cipher`、`password`、可选布尔字段 `udp-over-tcp` 和公共 dialer 字段。当前支持三种 AEAD 2017 方法（AES-128/256-GCM、ChaCha20-IETF-Poly1305）、两种 SS2022 BLAKE3/AES-GCM 方法和 `2022-blake3-chacha20-poly1305`。2022 password 必须是精确 16/32 字节的 base64 PSK；AES 可使用 `identityPSK:...:userPSK`，最多 8 个身份密钥，TCP/原生 UDP 均生成 SIP023 EIH。ChaCha 不接受身份链，UDP 使用 XChaCha20-Poly1305。超长密钥不做哈希兼容，TLS 配置拒绝。
+
+`plugin` / `plugin-opts` 预留 [中立 stream plugin provider](../../src/contracts/io/plugin.h)，本轮没有内置插件或外部进程启动器。缺少注入 provider 的实例创建返回 ENOTSUP；binding 必须提供 carrier、retire 和 destroy，并通过 scope 持有异步资源。插件模式只支持 stream 或 UoT，原生 UDP 明确拒绝，不能绕过插件直接联网。
 
 TCP 复用 record filter。2022 preface 将 salt、固定头、含非零随机 padding 的可变头合并为一次下层写入；响应校验 type、30 秒时间差和请求 salt。AEAD 2017 单记录上限 16,383，2022 为 65,535；空 payload 的鉴权记录也会被消费，未完整的 header/record EOF 明确失败。与 VLESS 一样，open 只说明请求已写出，不能替代往返连通性验证。
 
@@ -133,7 +135,7 @@ AEAD 2017 没有时间戳，因此实例工厂要求注入跨 worker、跨配置
 
 SS 2022 TCP 响应绑定请求 salt；UDP 使用独立客户端 session、递增 packet ID 和两个服务端 session 的 1,024 包滑动窗口。每个服务端 session 至少保留 60 秒；所有鉴权、时间、客户端绑定、padding 和地址检查通过后才更新窗口。第三个服务端 session 在没有过期槽位时拒绝。时间戳使用 Unix 时钟，保留期使用单调时钟，两者都可注入测试。默认熵来自 BoringSSL CSPRNG；熵失败不会发送未加密或复用 nonce 的数据。
 
-协议依据为 [Shadowsocks AEAD](https://shadowsocks.org/doc/aead.html) 与 [SIP022](https://shadowsocks.org/doc/sip022.html)。独立 Go 加密 fixture 验证篡改、截断、salt/time/session 绑定、重放、乱序、窗口和内存失败。真实网络对端固定 sing-box v1.12.12；本机观察到同一远端映射由 IPv4 切换到 IPv6/域名的对端限制，独立客户端对照也复现，因此真实互通分别覆盖 IPv4 A/B/A、IPv6 lane 和域名首包。未推导公网 NAT 或设备验证。
+协议依据为 [Shadowsocks AEAD](https://shadowsocks.org/doc/aead.html) 、[SIP022](https://shadowsocks.org/doc/sip022.html) 与 [SIP023](https://shadowsocks.org/doc/sip023.html)。独立 Go 加密 fixture 验证篡改、截断、salt/time/session 绑定、重放、乱序、窗口和内存失败。真实网络对端固定 sing-box v1.12.12；本机观察到同一远端映射由 IPv4 切换到 IPv6/域名的对端限制，独立客户端对照也复现，因此真实互通分别覆盖 IPv4 A/B/A、IPv6 lane 和域名首包。未推导公网 NAT 或设备验证。
 
 ## 共享流式 datagram 与 UoT
 
@@ -143,13 +145,13 @@ SS 2022 TCP 响应绑定请求 salt；UDP 使用独立客户端 session、递增
 
 UoT payload 协议上限为 65,535 字节，队列配置仍可限制单次接纳；实际 UDP 转发尺寸受对端 OS/path MTU 限制。local-address 返回 ENOTSUP，不将承载 stream 的 TCP 端口当成远端 UDP NAT 端口。open 只表示 carrier 与其必要前缀已就绪，不能证明后续 UDP 目标可达。线格式见 [SagerNet UoT 文档](https://sing-box.sagernet.org/configuration/shared/udp-over-tcp/)。
 
-独立 Python fixture 验证地址类型、首包请求/后续帧、空包、255 字节域名、65,535 字节 payload、部分输入和失败分配。受控 stream 验证 EOF 截断、错误地址、读暂停、部分 batch、背压、绝对 deadline、取消后迟到回调及 stop 等待。SS 的固定独立对端对五种 cipher 分别运行 native UDP/UoT，实例与配置提前退休后通道仍正常收尾；AnyTLS 的 TCP/UoT 另有独立对端测试。SS native UDP/UoT、AnyTLS UoT 和 VLESS XUDP 均通过公共 association 的双 worker/三 family lane、固定 plan、批量、配置释放与停止组合测试。
+独立 Python fixture 验证地址类型、首包请求/后续帧、空包、255 字节域名、65,535 字节 payload、部分输入和失败分配。受控 stream 验证 EOF 截断、错误地址、读暂停、部分 batch、背压、绝对 deadline、取消后迟到回调及 stop 等待。SS 的固定独立对端对六种 cipher 分别运行 native UDP/UoT，实例与配置提前退休后通道仍正常收尾；AnyTLS 的 TCP/UoT 另有独立对端测试。SS native UDP/UoT、AnyTLS UoT 和 VLESS XUDP 均通过公共 association 的双 worker/三 family lane、固定 plan、批量、配置释放与停止组合测试。
 
 ## VLESS XUDP
 
-[独立 XUDP codec](../../src/codec/xudp/codec.c) 实现 Single XUDP：VLESS 外层发送 CommandMux 3，不发送目标地址；首个 datagram 发送 New/session ID 0，后续 Keep，每包都携带目标地址。地址编码使用共享 port-first helper。每个 datagram channel 拥有独立承载流；不实现跨连接 global-ID 复用、自动重放或 TCP Mux。payload 上限 65,535，实际 UDP 转发尺寸由对端 OS/path 决定。
+[独立 XUDP codec](../../src/codec/xudp/codec.c) 实现 Single XUDP：VLESS 外层发送 CommandMux 3，不发送目标地址；首个 datagram 发送 New/session ID 0，后续 Keep，每包都携带目标地址。地址编码使用共享 port-first helper。每个 datagram channel 拥有独立承载流和随机 8 字节非零 GlobalID。收到真实回复后，承载丢失会在相同固定 plan 上重建并携带同一 GlobalID，使支持恢复的对端继续使用原 UDP 映射。重连期间 send 返回 EAGAIN；已接纳的包完成一次，不自动重放。未确认初始通道、畸形/截断帧、协议 End、认证失败及显式取消均不恢复；没有新回复的连续故障次数有界。TCP Mux 仍未实现。payload 上限 65,535，实际 UDP 转发尺寸由对端 OS/path 决定。
 
-接收端严格校验 metadata 长度、session ID、UDP network、地址与选项。无地址 Keep 使用首个目的地址；带地址的包保留对端提供的 peer，包括备用回复端口。KeepAlive 数据只消耗不交付；End 可交付最后一包后以 ECLOSED 结束通道；错误标记、未知命令和截断关闭通道。通用 backend 负责有界重组、背压与关闭屏障，association 不辨识 XUDP/UoT。
+接收端严格校验 metadata 长度、session ID、UDP network、地址与选项。无地址 Keep 使用首个目的地址；带地址的包保留对端提供的 peer，包括备用回复端口。KeepAlive 数据只消耗不交付；End 可交付最后一包后以 ECLOSED 结束通道；错误标记、未知命令和截断关闭通道。通用 backend 负责有界重组、背压与关闭屏障；VLESS 专用恢复包装管理承载代际，association 不辨识 XUDP/UoT。固定 Xray 的 22 个通道、66 次跨连接迁移检查了 UDP source port 连续与 payload 不重放，覆盖 plain/TLS/encryption/Vision 组合。
 
 线格式依据 [Project X Mux.Cool](https://xtls.github.io/en/development/protocols/muxcool.html)。固定 sing-box v1.12.12 和 Xray v26.10.31 对端、独立 sing-vmess v0.2.7 对照和 Python TLS/UDP 对端分别提供互通、对端限制与完整空包/异常帧证据。固定外部对端均丢弃空 XUDP；sing-box 的同连接 IPv4→IPv6 切换也不支持。Solaris 不据此改写地址或将空包转为非空，支持的语义由独立 fixture 和可处理空包的真实 UDP 对端验证。
 
@@ -157,13 +159,13 @@ UoT payload 协议上限为 65,535 字节，队列配置仍可限制单次接纳
 
 [共享 session pool](../../src/transport/session/pool.h) 管理 carrier、子流、队列、deadline、空闲回收和故障传播，codec 只负责帧和输出分包。每个 pool 属于一个 worker；默认会话队列至少 1 MiB/64 请求，配置更大子流限制时相应提高，子流仍受自己的 pending 限制。接收区由 frame limit 加最多 64 KiB carrier delivery 限定，不另建无界子流接收队列。暂停的子流可在下一 DATA 帧阻塞整个 session；共享层可配置多子流复用，AnyTLS 按协议选择最新空闲 session，每个 session 同时承载一个子流。
 
-子流取消后，尚未开始的 DATA 从队列移除；已开始的分包必须完成当前帧，再发送全关闭标记。已接纳 write 恰好完成一次，scope 保留到 carrier 的迟到完成。session 故障关闭所有子流，不自动重放数据。模块退休停止新 admission、立即回收空闲 session，活动子流排空后再关闭 carrier；engine stop 则取消全部 scope。空闲截止时间在选择 session 时也检查，避免 timer 尚未执行时复用已过期连接。
+子流取消后，尚未开始的 DATA 从队列移除；已开始的分包必须完成当前帧，再发送全关闭标记。已接纳 write 恰好完成一次，scope 保留到 carrier 的迟到完成。session 故障关闭所有子流，不自动重放数据。模块退休停止新 admission、立即回收空闲 session，活动子流排空后再关闭 carrier；engine stop 则取消全部 scope。AnyTLS 按配置周期清理过期空闲 session，并保留最新的 min-idle-session 数量；两次检查之间仍可复用空闲 session。共享 pool 未启用周期检查时，选择 session 才即时检查空闲截止时间。
 
-`anytls` 配置要求 `server`、`port`、`password`、`tls: true`、`ca-pem` 和 identity，支持公共 dialer 字段及 `idle-session-timeout-ms`（默认 60,000，范围 1–3,600,000）和 `session-limit`（默认 64，范围 1–1,024）。只支持协议 v2；TLS 信任与身份校验沿用共用 transport。当前子流单次 write 最大 512 KiB，再按 65,535 字节的 PSH 帧分段；队列限制可以进一步降低接纳上限。
+`anytls` 配置要求 `server`、`port`、`password`、`tls: true`、`ca-pem` 和 identity，支持公共 dialer 字段、`idle-session-timeout-ms`（默认 60,000，范围 1–3,600,000）、`idle-session-check-interval-ms`（默认 30,000，同范围）、`min-idle-session`（默认 0，不超过 session-limit）和 `session-limit`（默认 64，范围 1–1,024）。客户端声明 v2，未收到 ServerSettings 时按 v1 处理；收到 v2 或更高版本声明后使用 v2 能力，不因未来版本号直接拒绝；TLS 信任与身份校验沿用共用 transport。当前子流单次 write 最大 512 KiB，再按 65,535 字节的 PSH 帧分段；队列限制可以进一步降低接纳上限。
 
-TCP open 等待请求写入和成功 SYNACK，SYNACK 错误关闭该子流。UoT 的目的地址还在应用 preface 内，对端读取该 preface 后才可能确认，所以其 carrier open 只等待请求写入，后续错误仍传播到 datagram。AnyTLS FIN 是整个子流关闭，不发布 HALF_CLOSE 能力，shutdown_write 返回 ENOTSUP；不能把它伪装成 TCP 半关闭。
+已协商 v2 的 session 上，TCP open 等待请求写入和成功 SYNACK；v1 不等待不存在的 SYNACK。SYNACK 错误关闭该子流；复用 session 的 SYNACK 超时会移除整个失效 session，且不重放应用数据。HeartRequest 返回 HeartResponse，不引入参考实现没有的主动心跳。UoT 的目的地址还在应用 preface 内，对端读取该 preface 后才可能确认，所以其 carrier open 只等待请求写入，后续错误仍传播到 datagram。AnyTLS FIN 是整个子流关闭，不发布 HALF_CLOSE 能力，shutdown_write 返回 ENOTSUP；不能把它伪装成 TCP 半关闭。
 
-认证采用密码 SHA-256 和 padding0。首个 session 包组合 Settings、SYN 和目的地址 PSH；padding 保留每次 carrier write 的边界。服务端更新的策略仅影响该 worker/client 后续新 session，活动 session 保持快照。策略最多 4 KiB、32 个包编号、每包 16 项，每项长度不超过 65,535；无效或超限策略明确关闭，不静默忽略。随机范围使用拒绝采样，熵提供者异常不会形成无限循环。Alert 拒绝 session，并经可选 `module_services.diagnostic` sink 交付最多 1 KiB 的对端文本；文本是借用的不可信字节，宿主负责安全显示，库不直接写 stderr。
+认证采用密码 SHA-256 和 padding0。首个 session 包组合 Settings、SYN 和目的地址 PSH；padding 保留每次 carrier write 的边界。服务端更新的策略仅影响该 worker/client 后续新 session，活动 session 保持快照。策略最多 4 KiB、32 行稀疏包编号（uint32）、每包 16 项，每项长度不超过 65,535；无效或超限策略明确关闭，不静默忽略。随机范围使用拒绝采样，熵提供者异常不会形成无限循环。Alert 拒绝 session，并经可选 `module_services.diagnostic` sink 交付最多 1 KiB 的对端文本；文本是借用的不可信字节，宿主负责安全显示，库不直接写 stderr。
 
 线格式依据 [AnyTLS 协议文档](https://github.com/anytls/anytls-go/blob/main/docs/protocol.md)。固定 sing-box v1.12.12/sing-anytls v0.0.11 对端验证双 worker、双栈/域名、TCP/UoT、空包、背压、错误凭据和取消。独立 Python TLS 对端确认每个 worker 在同一 TLS session 上依次完成三个子流，并验证拆包、padding 更新、错误版本/命令、截断和 SYNACK 拒绝；Python binary fixture 单独验证认证、帧、padding 与失败回滚。共享 session 受控测试覆盖多子流、最新 session 选择、空闲超时、故障传播、部分帧取消、迟到 write 的 stop 屏障及分配失败。
 
@@ -171,7 +173,7 @@ TCP open 等待请求写入和成功 SYNACK，SYNACK 错误关闭该子流。UoT
 
 当前 socket preparation 是 nonblocking 同步回调，在 TCP connect/首次 UDP send 前执行；本地 bind 也经统一服务。回调不能私自关闭借用的 native handle，且需考虑不同 worker 并发调用。
 
-异步 Android protect、系统接口自动选择、宿主 DNS 接管与 TUN 尚未实现。最小 resolver 使用系统 getaddrinfo，不宣称控制了 OS 内部 DNS socket 的 protect 策略。
+异步 Android protect、系统接口自动选择和宿主 DNS 接管尚未实现。TUN 内部接入与平台边界见 [TUN 用法](TUN.md)。最小 resolver 使用系统 getaddrinfo，不宣称控制了 OS 内部 DNS socket 的 protect 策略。
 
 公开安装 SDK 仍是 engine 生命周期/控制入口。Direct、I/O、executor、resolver 均是内部模块接口，不是已发布的宿主网络连接 API。
 

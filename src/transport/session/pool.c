@@ -19,6 +19,7 @@ struct solaris_session_pool {
     solaris_scope_t scope;
     solaris_session_pool_options_t options;
     session_t *sessions;
+    solaris_deadline_t *idle_check;
     size_t count;
     int retired, accepted;
 };
@@ -40,7 +41,7 @@ struct session {
     uint32_t next_id;
     uint64_t idle_expires;
     solaris_status_t status;
-    int connected, writing, carrier_eof, close_requested, linked;
+    int connected, writing, carrier_eof, close_requested, linked, idle_tracked;
 };
 struct child {
     child_t *next;
@@ -63,6 +64,7 @@ static void schedule(session_t *s);
 static void fail(session_t *s, solaris_status_t status);
 static void child_close(child_t *c, solaris_status_t status, int remote);
 static void collect_idle(session_t *s);
+static void check_idle_later(solaris_session_pool_t *pool);
 
 void solaris_session_batch_clear(solaris_session_batch_t *batch)
 {
@@ -123,10 +125,16 @@ static void child_close(child_t *c, solaris_status_t status, int remote)
     c->closing = 1; c->status = status; c->remote_end = remote;
     solaris_scope_cancel(&c->scope);
 }
+static void open_expired(child_t *c)
+{
+    if (c->wait_ack && c->session->pool->options.ack_timeout_fails_session)
+        fail(c->session, SOLARIS_ETIMEDOUT);
+    child_close(c, SOLARIS_ETIMEDOUT, 0);
+}
 static void expired(void *context, solaris_status_t status)
 {
     child_t *c = context; c->deadline = NULL;
-    if (status == SOLARIS_OK && !c->opened) child_close(c, SOLARIS_ETIMEDOUT, 0);
+    if (status == SOLARIS_OK && !c->opened && !c->closing) open_expired(c);
     solaris_scope_release(&c->scope);
 }
 static void idle_expired(void *context, solaris_status_t status)
@@ -208,7 +216,7 @@ static child_t *find_child(session_t *s, uint32_t id)
 static void notify_open(child_t *c)
 {
     if (c->opened || c->closing || !c->ready || !c->sent_open) return;
-    if (solaris_executor_now_ns(c->scope.owner) >= c->expires) { child_close(c, SOLARIS_ETIMEDOUT, 0); return; }
+    if (solaris_executor_now_ns(c->scope.owner) >= c->expires) { open_expired(c); return; }
     c->opened = 1;
     if (c->deadline != NULL) solaris_deadline_cancel(c->deadline);
     c->callbacks.on_open(c->context, &c->stream, SOLARIS_OK);
@@ -227,6 +235,8 @@ static void pump(void *context)
             s->begin += used; s->event_pending = 1;
         }
         child_t *c = find_child(s, s->event.id);
+        if (c != NULL && !c->opened && !c->closing && solaris_executor_now_ns(c->scope.owner) >= c->expires)
+            open_expired(c);
         if (c != NULL && !c->closing) {
             if (s->event.kind == SOLARIS_SESSION_READY) {
                 if (s->event.status != SOLARIS_OK) child_close(c, s->event.status, 1);
@@ -255,7 +265,7 @@ static void pump(void *context)
     if (!s->close_requested && s->carrier_eof && needs_input && !s->event_pending) fail(s, SOLARIS_EIO);
     for (child_t *c = s->children; c != NULL; c = c->next) {
         if (s->close_requested) child_close(c, s->status == SOLARIS_OK ? SOLARIS_ECANCELLED : s->status, 1);
-        if (!c->opened && !c->closing && solaris_executor_now_ns(s->scope.owner) >= c->expires) child_close(c, SOLARIS_ETIMEDOUT, 0);
+        if (!c->opened && !c->closing && solaris_executor_now_ns(s->scope.owner) >= c->expires) open_expired(c);
         notify_open(c);
         if (c->closing) {
             if (!c->opened) { c->opened = 1; if (c->accepted) c->callbacks.on_open(c->context, &c->stream, c->status == SOLARIS_OK ? SOLARIS_ECANCELLED : c->status); }
@@ -320,7 +330,15 @@ static void schedule(session_t *s)
 static void collect_idle(session_t *s)
 {
     if (s->children != NULL || s->head != NULL || s->writing || s->close_requested) return;
-    if (s->pool->retired) { fail(s, SOLARIS_OK); return; }
+    if (s->pool->retired || s->next_id == UINT32_MAX) { fail(s, SOLARIS_OK); return; }
+    if (s->pool->options.idle_check_interval_ms != 0u) {
+        if (!s->idle_tracked) {
+            uint64_t now = solaris_executor_now_ns(s->scope.owner), duration = s->pool->options.idle_timeout_ms * UINT64_C(1000000);
+            if (duration > UINT64_MAX - now) { fail(s, SOLARIS_EOVERFLOW); return; }
+            s->idle_tracked = 1; s->idle_expires = now + duration;
+        }
+        check_idle_later(s->pool); return;
+    }
     if (s->idle == NULL) {
         uint64_t now = solaris_executor_now_ns(s->scope.owner);
         uint64_t duration = s->pool->options.idle_timeout_ms * UINT64_C(1000000);
@@ -329,6 +347,41 @@ static void collect_idle(session_t *s)
         solaris_scope_retain(&s->scope);
         solaris_status_t rc = solaris_deadline_start(s->scope.owner, s->pool->options.idle_timeout_ms, idle_expired, s, &s->idle);
         if (rc != SOLARIS_OK) { solaris_scope_release(&s->scope); fail(s, rc); }
+    }
+}
+static void idle_checked(void *context, solaris_status_t status)
+{
+    solaris_session_pool_t *pool = context; pool->idle_check = NULL;
+    if (status == SOLARIS_OK && !pool->retired) {
+        uint64_t now = solaris_executor_now_ns(pool->scope.owner);
+        uint64_t duration = pool->options.idle_timeout_ms * UINT64_C(1000000);
+        size_t retained = 0u;
+        /* New sessions are inserted at the head, so this is descending Seq. */
+        for (session_t *s = pool->sessions; s != NULL; s = s->next) {
+            if (s->close_requested || !s->idle_tracked || s->children != NULL || s->head != NULL || s->writing) continue;
+            if (now >= s->idle_expires) {
+                if (retained >= pool->options.min_idle_sessions) { fail(s, SOLARIS_OK); continue; }
+                if (duration > UINT64_MAX - now) { fail(s, SOLARIS_EOVERFLOW); continue; }
+                s->idle_expires = now + duration;
+            }
+            retained++;
+        }
+        check_idle_later(pool);
+    }
+    solaris_scope_release(&pool->scope);
+}
+static void check_idle_later(solaris_session_pool_t *pool)
+{
+    if (pool->retired || pool->idle_check != NULL || pool->options.idle_check_interval_ms == 0u) return;
+    session_t *idle = pool->sessions;
+    while (idle != NULL && (idle->close_requested || !idle->idle_tracked)) idle = idle->next;
+    if (idle == NULL) return;
+    solaris_scope_retain(&pool->scope);
+    solaris_status_t rc = solaris_deadline_start(pool->scope.owner, pool->options.idle_check_interval_ms, idle_checked, pool, &pool->idle_check);
+    if (rc != SOLARIS_OK) {
+        solaris_scope_release(&pool->scope);
+        for (session_t *s = pool->sessions; s != NULL; s = s->next)
+            if (s->idle_tracked && !s->close_requested) fail(s, rc);
     }
 }
 static solaris_status_t child_write(void *state, const solaris_slice_t *data, solaris_io_done_fn done, void *context)
@@ -399,7 +452,7 @@ solaris_status_t solaris_session_pool_open(solaris_session_pool_t *pool, const s
     solaris_status_t normalized = solaris_dialer_options_normalize(options == NULL ? &pool->options.dialer : options, &limits);
     if (normalized != SOLARIS_OK) return normalized;
     if (limits.pending_byte_limit > pool->options.session_pending_bytes) return SOLARIS_EMSGSIZE;
-    for (session_t *candidate = pool->sessions; candidate != NULL; candidate = candidate->next)
+    for (session_t *candidate = pool->options.idle_check_interval_ms == 0u ? pool->sessions : NULL; candidate != NULL; candidate = candidate->next)
         if (!candidate->close_requested && candidate->children == NULL && candidate->idle != NULL &&
             solaris_executor_now_ns(pool->scope.owner) >= candidate->idle_expires) fail(candidate, SOLARIS_OK);
     session_t *s = pool->sessions;
@@ -417,6 +470,7 @@ solaris_status_t solaris_session_pool_open(solaris_session_pool_t *pool, const s
     if (rc != SOLARIS_OK) { solaris_memory_free(c); collect_idle(s); return rc; }
     solaris_scope_retain(&s->scope); solaris_scope_retain(&c->scope); /* list membership */
     c->next = s->children; s->children = c; s->child_count++;
+    s->idle_tracked = 0;
     if (s->idle != NULL) solaris_deadline_cancel(s->idle);
     uint64_t now = solaris_executor_now_ns(pool->scope.owner), duration = c->options.open_timeout_ms * UINT64_C(1000000);
     if (duration > UINT64_MAX - now) { child_close(c, SOLARIS_EOVERFLOW, 1); return SOLARIS_EOVERFLOW; }
@@ -435,6 +489,7 @@ solaris_status_t solaris_session_pool_open(solaris_session_pool_t *pool, const s
 static void pool_cancelled(void *context)
 {
     solaris_session_pool_t *pool = context; pool->retired = 1;
+    if (pool->idle_check != NULL) solaris_deadline_cancel(pool->idle_check);
     for (session_t *s = pool->sessions; s != NULL; s = s->next) fail(s, SOLARIS_ECANCELLED);
 }
 static void pool_destroyed(void *context)
@@ -451,6 +506,8 @@ solaris_status_t solaris_session_pool_create(solaris_executor_t *owner,
     if (owner == NULL || options == NULL || options->codec == NULL || options->session_limit == 0u || options->session_limit > 1024u ||
         options->streams_per_session == 0u || options->streams_per_session > 1024u || options->idle_timeout_ms == 0u ||
         options->idle_timeout_ms > UINT64_MAX / UINT64_C(1000000) ||
+        options->idle_check_interval_ms > UINT64_MAX / UINT64_C(1000000) || options->min_idle_sessions > options->session_limit ||
+        (options->min_idle_sessions != 0u && options->idle_check_interval_ms == 0u) ||
         options->codec->frame_limit == 0u || options->codec->frame_limit > 1024u * 1024u ||
         options->codec->create == NULL || options->codec->start == NULL || options->codec->open == NULL ||
         options->codec->write == NULL || options->codec->end == NULL || options->codec->decode == NULL || options->codec->destroy == NULL) return SOLARIS_EINVAL;
@@ -471,6 +528,7 @@ void solaris_session_pool_retire(solaris_session_pool_t *pool)
 {
     if (pool->retired) return;
     pool->retired = 1;
+    if (pool->idle_check != NULL) solaris_deadline_cancel(pool->idle_check);
     for (session_t *s = pool->sessions; s != NULL; s = s->next) collect_idle(s);
     if (pool->count == 0u) solaris_scope_cancel(&pool->scope);
 }

@@ -43,6 +43,14 @@ typedef struct solaris_session_pool_options {
      * defaults when larger. Child limits still apply independently. */
     size_t session_pending_bytes, session_pending_requests;
     uint64_t idle_timeout_ms;
+    /* Zero checks each idle session at its exact timeout. Otherwise sweep at
+     * this interval, retaining the newest min_idle_sessions without dialing
+     * replacements. Retire and executor stop always close retained sessions. */
+    uint64_t idle_check_interval_ms;
+    size_t min_idle_sessions;
+    /* A missing READY on an acknowledged open proves this carrier unhealthy.
+     * Fail it and its children; never replay application writes. */
+    int ack_timeout_fails_session;
     void (*on_close)(void *context);
     void *context;
 } solaris_session_pool_options_t;

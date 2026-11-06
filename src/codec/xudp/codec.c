@@ -5,13 +5,20 @@
 typedef struct xudp_codec {
     solaris_budget_t *budget;
     solaris_address_t first;
+    uint8_t global_id[8];
+    int global;
     int requested, ended;
 } xudp_codec_t;
 static solaris_status_t create(const void *parameters, solaris_budget_t *budget, void **out)
 {
-    (void)parameters; xudp_codec_t *codec = solaris_memory_allocate(budget, sizeof(*codec));
+    xudp_codec_t *codec = solaris_memory_allocate(budget, sizeof(*codec));
     if (codec == NULL) return SOLARIS_ENOMEM;
-    memset(codec, 0, sizeof(*codec)); codec->budget = budget; *out = codec; return SOLARIS_OK;
+    memset(codec, 0, sizeof(*codec)); codec->budget = budget;
+    if (parameters != NULL) {
+        memcpy(codec->global_id, ((const solaris_xudp_parameters_t *)parameters)->global_id, 8u);
+        for (size_t i = 0u; i < 8u; ++i) codec->global |= codec->global_id[i] != 0u;
+    }
+    *out = codec; return SOLARIS_OK;
 }
 static solaris_status_t start(void *state, solaris_buffer_t **out)
 { (void)state; *out = NULL; return SOLARIS_OK; }
@@ -24,12 +31,14 @@ static solaris_status_t encode(void *state, const solaris_address_t *destination
     uint8_t address[260]; size_t n;
     solaris_status_t rc = solaris_vmess_address_write(destination, address, sizeof(address), &n);
     if (rc != SOLARIS_OK) return rc;
-    rc = solaris_buffer_allocate(codec->budget, 9u + n + plain->length, out);
+    size_t identity = !codec->requested && codec->global ? 8u : 0u;
+    rc = solaris_buffer_allocate(codec->budget, 9u + n + identity + plain->length, out);
     if (rc != SOLARIS_OK) return rc;
-    uint8_t *wire = solaris_buffer_mutable_data(*out); size_t header = 5u + n;
+    uint8_t *wire = solaris_buffer_mutable_data(*out); size_t header = 5u + n + identity;
     wire[0] = (uint8_t)(header >> 8); wire[1] = (uint8_t)header;
     wire[2] = wire[3] = 0u; wire[4] = codec->requested ? 2u : 1u; wire[5] = 1u; wire[6] = 2u;
     memcpy(wire + 7u, address, n); n += 7u;
+    if (identity != 0u) { memcpy(wire + n, codec->global_id, identity); n += identity; }
     wire[n++] = (uint8_t)(plain->length >> 8); wire[n++] = (uint8_t)plain->length;
     if (plain->length != 0u) memcpy(wire + n, solaris_buffer_data(plain->buffer) + plain->offset, plain->length);
     rc = solaris_buffer_set_length(*out, n + plain->length);
@@ -75,5 +84,5 @@ static solaris_status_t decode(void *state, const uint8_t *wire, size_t size,
 static solaris_status_t finish(void *state) { (void)state; return SOLARIS_OK; }
 static void destroy(void *state) { solaris_memory_free(state); }
 const solaris_datagram_codec_ops_t solaris_xudp_codec = {
-    2u + 265u + 2u + UINT16_MAX, UINT16_MAX, create, start, encode, decode, finish, destroy
+    2u + 273u + 2u + UINT16_MAX, UINT16_MAX, create, start, encode, decode, finish, destroy
 };

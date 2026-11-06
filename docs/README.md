@@ -1,6 +1,6 @@
 # Solaris Core 开发文档
 
-基线日期：2026-11-03，最近更新：2026-11-05。新工程已进入 M1，实现与验收状态见开发计划。
+基线日期：2026-11-03，最近更新：2026-11-06。新工程已进入 M1，实现与验收状态见开发计划。
 
 ## 阅读顺序与职责
 
@@ -16,6 +16,7 @@
 实施配套：[M0 工程决策](development/M0_DECISIONS.md)、[已实现 SDK 用法](development/SDK.md)、[配置/协议/平台兼容矩阵](development/COMPATIBILITY.md)。目标规范不等于当前已支持能力。
 
 当前实现说明：[M1 模块工厂、UDP association 与统一 I/O](development/M1_DATA_PATH.md)。
+TUN 接入：[lwIP/system、宿主 packet I/O 与平台设备层](development/TUN.md)。
 TLS 依赖和协议扩展：[BoringSSL 固定基线、补丁与认证边界](development/TLS_BACKEND.md)。
 
 ## 文档使用规则

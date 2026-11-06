@@ -73,11 +73,14 @@ solaris_status_t solaris_ss_packet_decode(solaris_ss_packet_t *udp, const uint8_
 {
     *out = NULL;
     const solaris_ss_key_t *key = &udp->parameters.key;
-    size_t prefix = key->modern ? 16u : key->length;
+    size_t prefix = key->modern ? (key->chacha ? 24u : 16u) : key->length;
     if (size < prefix + 16u + 7u) return SOLARIS_EIO;
-    uint8_t header[16], nonce[12] = {0}; EVP_AEAD_CTX cipher; EVP_AEAD_CTX_zero(&cipher);
+    uint8_t header[16], nonce[24] = {0}; size_t nonce_size = 12u; EVP_AEAD_CTX cipher; EVP_AEAD_CTX_zero(&cipher);
     solaris_status_t rc;
-    if (key->modern) {
+    if (key->modern && key->chacha) {
+        nonce_size = 24u; memcpy(nonce, wire, nonce_size);
+        rc = EVP_AEAD_CTX_init(&cipher, EVP_aead_xchacha20_poly1305(), key->bytes, key->length, 16u, NULL) ? SOLARIS_OK : SOLARIS_EIO;
+    } else if (key->modern) {
         AES_KEY aes; if (AES_set_decrypt_key(key->bytes, (unsigned int)(key->length * 8u), &aes) != 0) return SOLARIS_EIO;
         AES_decrypt(wire, header, &aes); OPENSSL_cleanse(&aes, sizeof(aes));
         memcpy(nonce, header + 4u, 12u); rc = solaris_ss_aead(key, header, 8u, &cipher);
@@ -86,16 +89,23 @@ solaris_status_t solaris_ss_packet_decode(solaris_ss_packet_t *udp, const uint8_
     rc = solaris_buffer_allocate(udp->budget, size - prefix - 16u, out);
     if (rc != SOLARIS_OK) { EVP_AEAD_CTX_cleanup(&cipher); return rc; }
     uint8_t *plain = solaris_buffer_mutable_data(*out); size_t length = 0u;
-    int ok = EVP_AEAD_CTX_open(&cipher, plain, &length, size - prefix - 16u, nonce, 12u, wire + prefix, size - prefix, NULL, 0u);
+    int ok = EVP_AEAD_CTX_open(&cipher, plain, &length, size - prefix - 16u, nonce, nonce_size, wire + prefix, size - prefix, NULL, 0u);
     EVP_AEAD_CTX_cleanup(&cipher); if (!ok) return SOLARIS_EACCESS;
     size_t offset = 0u;
+    if (key->modern && key->chacha) {
+        if (length < sizeof(header)) return SOLARIS_EIO;
+        memcpy(header, plain, sizeof(header));
+        offset = sizeof(header);
+    }
     if (key->modern) {
-        if (length < 19u || plain[0] != 1u ||
-            !solaris_ss_time_valid(&udp->parameters.source, solaris_ss_read64(plain + 1u)) ||
-            CRYPTO_memcmp(plain + 9u, udp->session, 8u) != 0 || CRYPTO_memcmp(header, udp->session, 8u) == 0) return SOLARIS_EACCESS;
-        size_t padding = ((size_t)plain[17] << 8) | plain[18];
-        if (padding > length - 19u) return SOLARIS_EIO;
-        offset = 19u + padding;
+        uint8_t *main = plain + offset;
+        size_t main_length = length - offset;
+        if (main_length < 19u || main[0] != 1u ||
+            !solaris_ss_time_valid(&udp->parameters.source, solaris_ss_read64(main + 1u)) ||
+            CRYPTO_memcmp(main + 9u, udp->session, 8u) != 0 || CRYPTO_memcmp(header, udp->session, 8u) == 0) return SOLARIS_EACCESS;
+        size_t padding = ((size_t)main[17] << 8) | main[18];
+        if (padding > main_length - 19u) return SOLARIS_EIO;
+        offset += 19u + padding;
     }
     size_t address_length;
     rc = solaris_socks_address_read(plain + offset, length - offset, source, &address_length);
@@ -119,23 +129,39 @@ solaris_status_t solaris_ss_packet_encode(solaris_ss_packet_t *udp, const solari
     solaris_status_t rc = solaris_socks_address_write(destination, address, sizeof(address), &address_size);
     if (rc != SOLARIS_OK) return rc;
     const solaris_ss_key_t *key = &udp->parameters.key;
-    size_t prefix = key->modern ? 16u : key->length;
-    size_t header_size = key->modern ? 11u : 0u, size = prefix + header_size + address_size + data->length + 16u;
+    size_t prefix = key->modern ? (key->chacha ? 24u : 16u + key->identity_count * 16u) : key->length;
+    size_t header_size = key->modern ? (key->chacha ? 27u : 11u) : 0u;
+    size_t size = prefix + header_size + address_size + data->length + 16u;
+    if (key->modern && udp->exhausted) return SOLARIS_EOVERFLOW;
     rc = solaris_buffer_allocate(udp->budget, size, out);
     if (rc != SOLARIS_OK) return rc;
-    uint8_t *bytes = solaris_buffer_mutable_data(*out), nonce[12] = {0};
+    uint8_t *bytes = solaris_buffer_mutable_data(*out), nonce[24] = {0}, header[16];
+    size_t nonce_size = 12u;
     EVP_AEAD_CTX cipher; EVP_AEAD_CTX_zero(&cipher);
     if (key->modern) {
-        if (udp->exhausted) return SOLARIS_EOVERFLOW;
-        memcpy(bytes, udp->session, 8u); solaris_ss_write64(bytes + 8u, udp->packet_id);
+        memcpy(header, udp->session, 8u); solaris_ss_write64(header + 8u, udp->packet_id);
+        /* Reserve the packet ID before a potentially failing cipher operation:
+         * an error cannot make a subsequent request reuse an AES-GCM nonce. */
         if (udp->packet_id == UINT64_MAX) udp->exhausted = 1; else udp->packet_id++;
-        memcpy(nonce, bytes + 4u, 12u); rc = solaris_ss_aead(key, bytes, 8u, &cipher);
-        bytes[prefix] = 0u; solaris_ss_write64(bytes + prefix + 1u, solaris_ss_time(&udp->parameters.source));
-        bytes[prefix + 9u] = bytes[prefix + 10u] = 0u;
-        AES_KEY aes;
-        if (rc == SOLARIS_OK && AES_set_encrypt_key(key->bytes, (unsigned int)(key->length * 8u), &aes) == 0) {
-            AES_encrypt(bytes, bytes, &aes); OPENSSL_cleanse(&aes, sizeof(aes));
-        } else { EVP_AEAD_CTX_cleanup(&cipher); return SOLARIS_EIO; }
+        size_t main_offset = prefix;
+        if (key->chacha) {
+            nonce_size = 24u;
+            rc = solaris_ss_random(&udp->parameters.source, nonce, nonce_size);
+            if (rc != SOLARIS_OK) return rc;
+            memcpy(bytes, nonce, nonce_size); memcpy(bytes + prefix, header, sizeof(header));
+            main_offset += sizeof(header);
+            rc = EVP_AEAD_CTX_init(&cipher, EVP_aead_xchacha20_poly1305(), key->bytes, key->length, 16u, NULL) ? SOLARIS_OK : SOLARIS_EIO;
+        } else {
+            memcpy(nonce, header + 4u, 12u); rc = solaris_ss_aead(key, header, 8u, &cipher);
+            if (rc == SOLARIS_OK) rc = solaris_ss_identity_headers(key, NULL, header, bytes + 16u);
+            AES_KEY aes;
+            const uint8_t *first = key->identity_count != 0u ? key->identities[0] : key->bytes;
+            if (rc == SOLARIS_OK && AES_set_encrypt_key(first, (unsigned int)(key->length * 8u), &aes) == 0) {
+                AES_encrypt(header, bytes, &aes); OPENSSL_cleanse(&aes, sizeof(aes));
+            } else { EVP_AEAD_CTX_cleanup(&cipher); return SOLARIS_EIO; }
+        }
+        bytes[main_offset] = 0u; solaris_ss_write64(bytes + main_offset + 1u, solaris_ss_time(&udp->parameters.source));
+        bytes[main_offset + 9u] = bytes[main_offset + 10u] = 0u;
     } else {
         rc = solaris_ss_random(&udp->parameters.source, bytes, key->length);
         if (rc == SOLARIS_OK) rc = solaris_ss_replay(&udp->parameters, bytes);
@@ -145,7 +171,7 @@ solaris_status_t solaris_ss_packet_encode(solaris_ss_packet_t *udp, const solari
     memcpy(bytes + prefix + header_size, address, address_size);
     memcpy(bytes + prefix + header_size + address_size, solaris_buffer_data(data->buffer) + data->offset, data->length);
     size_t written = 0u;
-    int ok = EVP_AEAD_CTX_seal(&cipher, bytes + prefix, &written, size - prefix, nonce, 12u,
+    int ok = EVP_AEAD_CTX_seal(&cipher, bytes + prefix, &written, size - prefix, nonce, nonce_size,
         bytes + prefix, size - prefix - 16u, NULL, 0u);
     EVP_AEAD_CTX_cleanup(&cipher);
     return ok && written == size - prefix ? solaris_buffer_set_length(*out, size) : SOLARIS_EIO;

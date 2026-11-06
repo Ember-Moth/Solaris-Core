@@ -27,6 +27,14 @@ def main():
         args.output.joinpath(f"{kind:02}-{mode:02}-{count:04}-{name}").write_bytes(bytes([kind, mode, 0]) + data)
         count += 1
 
+    ip_path = Path(__file__).resolve().parents[1] / "support/inbound/tun/ip.py"
+    ip_spec = importlib.util.spec_from_file_location("ip_fixtures", ip_path)
+    ip_module = importlib.util.module_from_spec(ip_spec); ip_spec.loader.exec_module(ip_module)
+    for version in (4, 6):
+        for protocol in (6, 17, 1 if version == 4 else 58):
+            for size in (0, 1, 1200):
+                seed(20, ip_module.packet(version, protocol, bytes(i % 251 for i in range(size))), name="ip")
+
     address = b"\x01\x7f\0\0\1\0\x35"
     vmess = b"\0\x35\1\x7f\0\0\1"
     for raw in [address, b"\3\x09localhost\1\xbb", b"\4" + bytes(15) + b"\1\1\xbb", b"\3\0\0\0"]:

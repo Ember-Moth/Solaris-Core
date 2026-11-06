@@ -11,7 +11,8 @@
 | M0 新工程骨架、Solaris 命名与基础 SDK | 已提交并推送 `8fa5180`，CI 通过 | 新 CMake/模块清单、私有 libuv、异步生命周期与安装消费 |
 | M1 框架与首批数据面 | M1-01–M1-08 的实现与本机功能验收完成 | M1 基线四种构建各 40 项；后续 TLS 扩展矩阵为 45 项，见下方记录 |
 | TLS 库扩展 | 五个补丁已实现，本机验收通过 | 四协议独立握手/交接测试；生产出站和配置接入仍分开推进 |
-| M2–M6 | 未开始 | 下一阶段为 YAML、路由、入站与宿主业务 API；不从 M1 推导支持 |
+| 协议补全与 TUN | XUDP 恢复、SS2022 ChaCha/EIH、多用户与 AnyTLS 协商/会话已补齐；TUN 内部数据面提前实现 | lwIP/system、平台设备层及边界见 [TUN 用法](TUN.md)；插件仅预留接口 |
+| M2、M4–M6 | 未开始 | 下一阶段为 YAML、路由、常规入站与宿主业务 API；不从底层数据面推导支持 |
 | 新 SDK/生命周期/安装消费验收 | macOS arm64 通过 | 共享/静态、完整 40 项、独立 C/C++ 消费、ASan/UBSan 与 TSan；详见最终记录 |
 | 远端 CI | M0 CI 通过；M1 远端 CI 尚未验收 | 不把 M0 的通过状态延伸到新代码 |
 | 代理协议互通、设备与性能验收 | M1 声明组合的常规互通通过；设备/性能未验收 | 长重复 Xray UDP 存在独立控制端也可复现的外部限制，不宣称生产稳定性 |
@@ -35,7 +36,7 @@ flowchart LR
 | M0 | 正常构建、安装、调用的新 Solaris 最小库 | G-BUILD、基础 G-LIFE | 已完成本机与 CI 验收 |
 | M1 | 模块注册、统一 I/O、UDP association、至少两个 workers；新增协议不改通用层 | G-MODULE、G-LIFE、G-WORKER、基础 G-UDP/G-INTEROP | 实现与本机功能验收完成；远端 CI 未运行，长重复限制见下文 |
 | M2 | 宿主可加载基础 mihomo YAML、代理、切组、查询与关闭连接 | G-CONFIG、G-RELOAD、已声明协议 G-INTEROP | 未开始 |
-| M3 | DNS/Fake-IP、双栈 TUN 与 Android/Apple VPN 闭环 | 完整基础 G-UDP、相关 G-DEVICE | 未开始 |
+| M3 | DNS/Fake-IP、双栈 TUN 与 Android/Apple VPN 闭环 | 完整基础 G-UDP、相关 G-DEVICE | TUN 内部数据面已实现；DNS/Fake-IP/sniff/公开绑定和真机闭环未完成 |
 | M4 | Provider、完整常用策略组、Geo/rule-set 与日常配置样本覆盖 | 扩展 G-CONFIG/G-RELOAD/G-INTEROP | 未开始 |
 | M5 | 更多协议/传输与 Windows/Linux/OpenHarmony 集成 | 新增组合 G-INTEROP、各平台 G-BUILD/G-DEVICE | 未开始 |
 | M6 | QUIC 等高级能力、栈扩展和有测量依据的性能策略 | 对应 G-INTEROP/G-DEVICE/G-PERF | 未开始 |
@@ -98,10 +99,10 @@ M1 的模块配置可以由测试视图构造，完整 YAML/策略控制在 M2�
 | M1-06b 裸 VLESS | 无 encryption/flow 的基础协议，plain/TLS carrier 的双 worker、双栈、域名、错误认证与关闭 | 已实现并通过本机独立对端 |
 | M1-06c VLESS encryption | 独立加密层与配置校验；固定 Xray 对端的握手、认证、记录边界、篡改/重放、超时/取消；启用的会话恢复模式逐项验证 | 已实现三种 appearance、1-RTT/0-RTT、双类认证密钥及 relay；固定 Xray 互通、独立 crypto fixture 和生命周期本机通过 |
 | M1-06d Vision | `xtls-rprx-vision` 的 flow、padding、内层 TLS 识别、raw 切换及缓冲交接；TLS 与 encryption 承载组合分别验证，明确 UDP 443 语义 | 已实现；真实内层 TLS 的双向 raw、padding/识别、TLS/encryption 组合和 UDP 443 策略本机通过 |
-| M1-06e VLESS XUDP | VLESS 的 datagram 路径采用 XUDP；双栈/域名、多目的、真实回复地址、空包、拆粘包/截断、session 故障及 association 关闭 | Single XUDP 已实现，plain/TLS、独立 codec、双 worker/双栈/domain、异常帧与 association 组合本机通过 |
-| M1-06f SS TCP/native UDP | 当前五种 cipher 的 TCP、原生 UDP、重放状态及生命周期 | 已实现并通过本机独立对端与异常报文测试 |
+| M1-06e VLESS XUDP | VLESS 的 datagram 路径采用 XUDP；双栈/域名、多目的、真实回复地址、空包、拆粘包/截断、session 故障及 association 关闭 | Single XUDP 与跨连接 GlobalID 恢复已实现，固定 Xray 验证映射连续且无数据报重放；plain/TLS/encryption/Vision、异常帧及取消通过 |
+| M1-06f SS TCP/native UDP | 六种 cipher 与 AES EIH/多用户链的 TCP、原生 UDP、重放状态及生命周期 | 已实现并通过本机独立对端与异常报文测试 |
 | M1-06g 共享 UoT | UoT v2 codec/流式 datagram backend；分别接入 SS 加密 stream 与 AnyTLS 子流；每个支持的 SS cipher 运行 UoT 互通与取消/背压/关闭测试 | 共享 backend/codec 的 SS/AnyTLS 接入已实现并通过本机互通；三种代理封装的 association 组合已验证 |
-| M1-06h AnyTLS/session | TLS、认证、padding、session 复用与故障传播；通过共享 UoT 提供 datagram | AnyTLS v2/TCP/UoT 已实现并通过本机互通及 session/codec 边界测试 |
+| M1-06h AnyTLS/session | TLS、认证、padding、session 复用与故障传播；通过共享 UoT 提供 datagram | AnyTLS v1/v2、padding、空闲配置与 TCP/UoT 已实现，互通和 session/codec 边界通过 |
 
 每个组合必须通过配置→registry→工厂入口，并声明有效能力；不支持的 encryption/flow/UDP 方案明确拒绝，不能静默降级。协议加密、flow、carrier 和 UDP 封装分别登记，不宣称任意组合可用。XUDP/UoT 的 U06 内部数据路径在 M1 验收，YAML/入站接入在 M2 验收。逐项测试要求见 [测试规范](TESTING.md#6-协议与解析器)。
 
@@ -263,7 +264,7 @@ fuzz RSS 是 fuzz 进程的观测值，不是内核生产内存或吞吐结论�
 | M3-01 | DNS 报文、UDP/TCP 上游、hosts/cache、policy 与代理服务器独立解析 | 受控 DNS 对端、缓存失效和解析依赖环用例 |
 | M3-02 | DoH/DoT、fallback、系统 DNS/网络变化 | 使用统一网络策略；不阻塞 I/O owner |
 | M3-03 | Fake-IP 分配/租约/排除/持久化边界、UDP DNAT 与歧义隔离 | U07，更新与重启不错误复用活跃映射 |
-| M3-04 | 双栈 TUN packet codec、TCP 栈 backend、UDP 接入和 sniff | IPv6/空包/校验和/MTU/分片能力如实体现 |
+| M3-04 | 双栈 TUN packet codec、lwIP/system TCP 与 UDP association 已实现；sniff 未实现 | 本地原始 IP/回环 socket/模拟设备验证；入站分片拒绝，UDP 回复按 MTU 分片；真实 TUN 待 G-DEVICE |
 | M3-05 | Android fd/protect、Apple packet callback 与薄绑定 | 真机或明确标注的对应设备验证，签名/模拟器不冒充真机 |
 | M3-06 | 断网恢复、前后台、重复启停、回调排空和 TUN 资源释放 | 相关 G-LIFE/G-WORKER/G-UDP/G-DEVICE 通过 |
 

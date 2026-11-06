@@ -17,8 +17,10 @@ def address(host, port):
     return struct.pack("!H", port) + data
 
 
-def frame(host, port, payload, status=2):
+def frame(host, port, payload, status=2, identity=b""):
     metadata = struct.pack("!HBBB", 0, status, 1, 2) + address(host, port)
+    if status == 1:
+        metadata += identity
     return struct.pack("!H", len(metadata)) + metadata + struct.pack("!H", len(payload)) + payload
 
 
@@ -32,6 +34,7 @@ def main():
             payload = bytes((i + n * 17) & 255 for n in range(length))
             (root / f"first-{i}.bin").write_bytes(frame(host, port, payload, 1))
             (root / f"frame-{i}.bin").write_bytes(frame(host, port, payload))
+            (root / f"global-{i}.bin").write_bytes(frame(host, port, payload, 1, bytes(range(1, 9))))
         subprocess.run([sys.argv[1], str(root), *sys.argv[2:]], check=True, timeout=15)
 
 

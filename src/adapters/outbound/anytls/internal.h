@@ -8,6 +8,7 @@
 typedef struct solaris_anytls_range { uint16_t low, high; int check; } solaris_anytls_range_t;
 typedef struct solaris_anytls_policy {
     uint32_t stop;
+    uint32_t packets[SOLARIS_ANYTLS_POLICY_ROWS];
     uint8_t counts[SOLARIS_ANYTLS_POLICY_ROWS];
     solaris_anytls_range_t rows[SOLARIS_ANYTLS_POLICY_ROWS][SOLARIS_ANYTLS_POLICY_PARTS];
     char md5[33];

@@ -11,14 +11,43 @@ import threading
 import time
 
 METHODS = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305",
-           "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm"]
+           "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305",
+           "2022-blake3-aes-128-gcm:multi", "2022-blake3-aes-256-gcm:multi",
+           "2022-blake3-aes-128-gcm:relay", "2022-blake3-aes-256-gcm:relay"]
 PAYLOAD = bytes((i * 17 + 29) & 255 for i in range(65541))
+
+
+def method_name(case):
+    return case.split(":")[0]
+
+
+def key(case, value):
+    return base64.b64encode(bytes([value]) * (16 if "128" in case else 32)).decode()
 
 
 def password(method, wrong=False):
     if method.startswith("2022-"):
-        return base64.b64encode(bytes([94 if wrong else 73]) * (16 if "128" in method else 32)).decode()
+        parts = []
+        if method.endswith(":relay"):
+            parts.append(key(method, 0x31))
+        if ":" in method:
+            parts.append(key(method, 0x32))
+        parts.append(key(method, 94 if wrong else 73))
+        return ":".join(parts)
     return "wrong-password" if wrong else "solaris-independent-peer"
+
+
+def identity_credentials(method):
+    parts = password(method).split(":")
+    if len(parts) == 1:
+        return []
+    result = [(":".join(parts[:-1] + [key(method, 74)]), 0)]
+    for index in range(len(parts) - 1):
+        wrong = list(parts)
+        wrong[index] = key(method, 0x5e)
+        result.append((":".join(wrong), 3))
+    result.append((":".join(reversed(parts)), 3))
+    return result
 
 
 def run_udp(args, ports, log):
@@ -62,7 +91,7 @@ def run_udp(args, ports, log):
                 for mode, host in [(0, "127.0.0.1"), (0, "localhost"), (4, "127.0.0.1"), (5, "127.0.0.1"), (1, "localhost"), (2, "127.0.0.1"), (3, "127.0.0.1")]:
                     with lock:
                         before = len(observations)
-                    result = subprocess.run([args.udp_client, "shadowsocks", str(port), password(method, mode == 3), method,
+                    result = subprocess.run([args.udp_client, "shadowsocks", str(port), password(method, mode == 3), method_name(method),
                         *(str(sock.getsockname()[1]) for sock in sockets), str(mode), host, transport], capture_output=True, text=True, timeout=15)
                     print(transport, method, mode, host, result.stdout.strip())
                     if result.returncode:
@@ -78,8 +107,15 @@ def run_udp(args, ports, log):
                         stable = sum({0, 1, 2, 4, 6}.issubset(packets) for packets in seen.values())
                         if stable != 2:
                             raise AssertionError(f"{transport}/{method}/{mode}/{host}: expected two stable mappings, got {stable}: {seen}")
+                for credentials, mode in identity_credentials(method):
+                    result = subprocess.run([args.udp_client, "shadowsocks", str(port), credentials, method_name(method),
+                        *(str(sock.getsockname()[1]) for sock in sockets), str(mode), "127.0.0.1", transport],
+                        capture_output=True, text=True, timeout=15)
+                    if result.returncode:
+                        log.seek(0)
+                        raise RuntimeError(f"identity UDP {transport} {method} mode {mode}: {result.stderr}\npeer: {log.read()}")
                 if args.association_client:
-                    result = subprocess.run([args.association_client, "shadowsocks", str(port), password(method), method,
+                    result = subprocess.run([args.association_client, "shadowsocks", str(port), password(method), method_name(method),
                         *(str(sock.getsockname()[1]) for sock in sockets), "6", "localhost", transport],
                         capture_output=True, text=True, timeout=15)
                     print(transport, method, "association", result.stdout.strip())
@@ -159,9 +195,25 @@ def main():
                 sock.bind(("127.0.0.1", 0))
                 reservations.append(sock)
                 ports.append(sock.getsockname()[1])
-            inbounds = [{"type": "shadowsocks", "tag": method, "listen": "127.0.0.1",
-                         "listen_port": port, "method": method, "password": password(method)}
-                        for method, port in zip(METHODS, ports)]
+            inbounds = []
+            for method, port in zip(METHODS, ports):
+                inbound = {"type": "shadowsocks", "tag": method, "listen": "127.0.0.1",
+                           "listen_port": port, "method": method_name(method), "password": key(method, 0x32) if ":" in method else password(method)}
+                if ":" in method:
+                    inbound["users"] = [{"name": "primary", "password": key(method, 73)},
+                                        {"name": "alternate", "password": key(method, 74)}]
+                if method.endswith(":relay"):
+                    sock = socket.socket()
+                    sock.bind(("127.0.0.1", 0))
+                    reservations.append(sock)
+                    terminal = sock.getsockname()[1]
+                    inbound["listen_port"] = terminal
+                    inbound["tag"] += "-terminal"
+                    inbounds.append({"type": "shadowsocks", "tag": method, "listen": "127.0.0.1",
+                        "listen_port": port, "method": method_name(method), "password": key(method, 0x31),
+                        "destinations": [{"name": "terminal", "password": key(method, 0x32),
+                                          "server": "127.0.0.1", "server_port": terminal}]})
+                inbounds.append(inbound)
             config = {"log": {"level": "warn"}, "inbounds": inbounds,
                       "outbounds": [{"type": "direct", "tag": "direct", "domain_strategy": "ipv4_only"}], "route": {"final": "direct"}}
             path = root / "config.json"
@@ -186,19 +238,26 @@ def main():
                     for host, target, mode in [("127.0.0.1", 0, 0), ("::1", 1, 0), ("localhost", 0, 0),
                                                ("127.0.0.1", 0, 1), ("127.0.0.1", 0, 2), ("127.0.0.1", 0, 3)]:
                         result = subprocess.run([args.client, "shadowsocks", str(port), host,
-                            str(listeners[target].getsockname()[1]), password(method, mode == 3), method, "-", str(mode)],
+                            str(listeners[target].getsockname()[1]), password(method, mode == 3), method_name(method), "-", str(mode)],
                             capture_output=True, text=True, timeout=15)
                         print(method, result.stdout.strip())
                         if result.returncode:
                             log.seek(0)
                             raise RuntimeError(f"{method} mode {mode}: {result.stderr}\npeer: {log.read()}")
+                    for credentials, mode in identity_credentials(method):
+                        result = subprocess.run([args.client, "shadowsocks", str(port), "127.0.0.1",
+                            str(listeners[0].getsockname()[1]), credentials, method_name(method), "-", str(mode)],
+                            capture_output=True, text=True, timeout=15)
+                        if result.returncode:
+                            log.seek(0)
+                            raise RuntimeError(f"identity TCP {method} mode {mode}: {result.stderr}\npeer: {log.read()}")
                 for thread in threads:
                     thread.join(timeout=1)
-                if failures or len(received) != 30:
+                if failures or len(received) != len(METHODS) * 6 + 2 * sum(":" in method for method in METHODS):
                     raise AssertionError(f"echo integrity: {failures}; echoes={len(received)}")
                 if args.udp_client:
                     run_udp(args, ports, log)
-                print(f"{version}: five Shadowsocks methods, TCP dual-stack/domain/cancellation/credentials passed")
+                print(f"{version}: six Shadowsocks methods plus AES multi-user and two-layer relay, TCP dual-stack/domain/cancellation/credentials passed")
         finally:
             stop.set()
             for sock in listeners:

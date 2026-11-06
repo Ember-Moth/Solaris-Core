@@ -6,14 +6,15 @@
 static const char default_policy[] =
     "stop=8\n0=30-30\n1=100-400\n2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000\n"
     "3=9-9,500-1000\n4=500-1000\n5=500-1000\n6=500-1000\n7=500-1000";
-static int number(const uint8_t **p, const uint8_t *end, uint32_t *out)
+static int number(const uint8_t **p, const uint8_t *end, uint32_t maximum, uint32_t *out)
 {
     const uint8_t *begin = *p; uint32_t n = 0u;
     while (*p != end && **p >= '0' && **p <= '9') {
-        if (n > 65535u) return 0;
-        n = n * 10u + (uint32_t)(*(*p)++ - '0');
+        uint32_t digit = (uint32_t)(*(*p)++ - '0');
+        if (n > (maximum - digit) / 10u) return 0;
+        n = n * 10u + digit;
     }
-    *out = n; return *p != begin && n <= 65535u;
+    *out = n; return *p != begin;
 }
 solaris_status_t solaris_anytls_policy_parse(const uint8_t *text, size_t length, solaris_anytls_policy_t *out)
 {
@@ -23,11 +24,17 @@ solaris_status_t solaris_anytls_policy_parse(const uint8_t *text, size_t length,
     while (p < end) {
         if ((size_t)(end - p) >= 5u && memcmp(p, "stop=", 5u) == 0) {
             p += 5u;
-            if (have_stop || !number(&p, end, &policy.stop) || policy.stop > SOLARIS_ANYTLS_POLICY_ROWS) return SOLARIS_EINVAL;
+            if (have_stop || !number(&p, end, UINT32_MAX, &policy.stop)) return SOLARIS_EINVAL;
             have_stop = 1;
         } else {
-            uint32_t row;
-            if (!number(&p, end, &row) || row >= SOLARIS_ANYTLS_POLICY_ROWS || p == end || *p++ != '=' || policy.counts[row] != 0u) return SOLARIS_EINVAL;
+            uint32_t packet; size_t row = SOLARIS_ANYTLS_POLICY_ROWS;
+            if (!number(&p, end, UINT32_MAX, &packet) || p == end || *p++ != '=') return SOLARIS_EINVAL;
+            for (size_t i = 0u; i < SOLARIS_ANYTLS_POLICY_ROWS; ++i) {
+                if (policy.counts[i] != 0u && policy.packets[i] == packet) return SOLARIS_EINVAL;
+                if (policy.counts[i] == 0u && row == SOLARIS_ANYTLS_POLICY_ROWS && (i == 0u) == (packet == 0u)) row = i;
+            }
+            if (row == SOLARIS_ANYTLS_POLICY_ROWS) return SOLARIS_EINVAL;
+            policy.packets[row] = packet;
             for (;;) {
                 uint8_t n = policy.counts[row];
                 if (n == SOLARIS_ANYTLS_POLICY_PARTS || p == end) return SOLARIS_EINVAL;
@@ -35,7 +42,7 @@ solaris_status_t solaris_anytls_policy_parse(const uint8_t *text, size_t length,
                 if (*p == 'c') { p++; range->check = 1; if (row == 0u) return SOLARIS_EINVAL; }
                 else {
                     uint32_t a, b;
-                    if (!number(&p, end, &a) || p == end || *p++ != '-' || !number(&p, end, &b) || a == 0u || b == 0u) return SOLARIS_EINVAL;
+                    if (!number(&p, end, 65535u, &a) || p == end || *p++ != '-' || !number(&p, end, 65535u, &b) || a == 0u || b == 0u) return SOLARIS_EINVAL;
                     range->low = (uint16_t)(a < b ? a : b); range->high = (uint16_t)(a > b ? a : b);
                 }
                 policy.counts[row]++;
@@ -92,9 +99,12 @@ solaris_status_t solaris_anytls_pad(const solaris_anytls_parameters_t *parameter
     const uint8_t *data, size_t length, solaris_session_batch_t *out)
 {
     size_t remain = length;
-    if (packet < policy->stop && packet < SOLARIS_ANYTLS_POLICY_ROWS) {
-        for (size_t i = 0u; i < policy->counts[packet]; ++i) {
-            const solaris_anytls_range_t *range = &policy->rows[packet][i];
+    size_t row = SOLARIS_ANYTLS_POLICY_ROWS;
+    for (size_t i = 0u; i < SOLARIS_ANYTLS_POLICY_ROWS; ++i)
+        if (policy->counts[i] != 0u && policy->packets[i] == packet) { row = i; break; }
+    if (packet < policy->stop && row != SOLARIS_ANYTLS_POLICY_ROWS) {
+        for (size_t i = 0u; i < policy->counts[row]; ++i) {
+            const solaris_anytls_range_t *range = &policy->rows[row][i];
             if (range->check) { if (remain == 0u) break; else continue; }
             size_t target; solaris_status_t rc = draw(parameters, range, &target); if (rc != SOLARIS_OK) return rc;
             size_t n = remain > target ? target : remain;

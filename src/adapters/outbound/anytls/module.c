@@ -11,7 +11,7 @@ enum { ANYTLS_CAPS = SOLARIS_OUTBOUND_STREAM | SOLARIS_OUTBOUND_STREAM_DOMAIN |
 typedef struct anytls_config {
     solaris_proxy_config_t proxy;
     uint8_t password_hash[32];
-    uint64_t idle_ms, sessions;
+    uint64_t idle_ms, idle_check_ms, min_idle, sessions;
 } anytls_config_t;
 typedef struct anytls_outbound {
     solaris_outbound_t outbound;
@@ -56,7 +56,7 @@ static void retire(void *state)
 static const solaris_outbound_ops_t operations = {capabilities, open_stream, open_datagram, retire};
 static solaris_status_t compile(const solaris_config_view_t *view, solaris_budget_t *budget, void **out, solaris_error_t *error)
 {
-    static const char *const fields[] = {SOLARIS_PROXY_CONFIG_FIELDS, "password", "idle-session-timeout-ms", "session-limit"};
+    static const char *const fields[] = {SOLARIS_PROXY_CONFIG_FIELDS, "password", "idle-session-timeout-ms", "idle-session-check-interval-ms", "min-idle-session", "session-limit"};
     solaris_status_t rc = solaris_config_check_fields(view, fields, sizeof(fields) / sizeof(fields[0]), error);
     if (rc != SOLARIS_OK) return rc;
     char password[1025]; rc = solaris_config_string(view, "password", 1, password, sizeof(password), error);
@@ -66,7 +66,9 @@ static solaris_status_t compile(const solaris_config_view_t *view, solaris_budge
     memset(config, 0, sizeof(*config)); *out = config;
     SHA256((const uint8_t *)password, strlen(password), config->password_hash); OPENSSL_cleanse(password, sizeof(password));
     rc = solaris_config_uint(view, "idle-session-timeout-ms", 60000u, 1u, 3600000u, &config->idle_ms, error);
+    if (rc == SOLARIS_OK) rc = solaris_config_uint(view, "idle-session-check-interval-ms", 30000u, 1u, 3600000u, &config->idle_check_ms, error);
     if (rc == SOLARIS_OK) rc = solaris_config_uint(view, "session-limit", 64u, 1u, 1024u, &config->sessions, error);
+    if (rc == SOLARIS_OK) rc = solaris_config_uint(view, "min-idle-session", 0u, 0u, config->sessions, &config->min_idle, error);
     if (rc == SOLARIS_OK) rc = solaris_proxy_config_compile(view, budget, &config->proxy, error);
     if (rc == SOLARIS_OK && config->proxy.tls == NULL) return solaris_config_error(view, "tls", "AnyTLS requires TLS with CA and identity validation", error);
     return rc;
@@ -92,6 +94,8 @@ static solaris_status_t create(const void *compiled, const solaris_module_servic
         .carrier = {.context = &a->transport, .open = solaris_proxy_transport_open}, .peer = a->transport.server,
         .dialer = a->transport.dialer, .codec = &solaris_anytls_session_codec, .parameters = &a->parameters,
         .session_limit = (size_t)config->sessions, .streams_per_session = 1u, .idle_timeout_ms = config->idle_ms,
+        .idle_check_interval_ms = config->idle_check_ms, .min_idle_sessions = (size_t)config->min_idle,
+        .ack_timeout_fails_session = 1,
         .on_close = pool_closed, .context = a
     };
     rc = solaris_session_pool_create(services->owner, &options, &a->pool); if (rc != SOLARIS_OK) return rc;

@@ -73,7 +73,10 @@
   "lwip": {
     "repository": "https://github.com/lwip-tcpip/lwip",
     "revision": "77dcd25a72509eb83f72b033d219b1d40cd8eb95",
-    "stage": "initial serialized TCP stack candidate; not linked in M0"
+    "stage": "TUN raw TCP stack; serialized single active owner, private static dependency",
+    "version": "2.2.1",
+    "url": "https://codeload.github.com/lwip-tcpip/lwip/tar.gz/77dcd25a72509eb83f72b033d219b1d40cd8eb95",
+    "sha256": "85a09ebe68c260d4876e800220588e5a0b624266c994cc25da978210c2813f14"
   },
   "reference_original_core": {
     "revision": "f9ca89ac3cf13808463beac9b4130d6639ffb1c7",
@@ -95,7 +98,7 @@
     "module": "github.com/anytls/sing-anytls",
     "version": "v0.0.11",
     "via": "reference_sing_box v1.12.12 go.mod/go.sum",
-    "stage": "M1 independent peer only; AnyTLS protocol v2"
+    "stage": "Independent AnyTLS v2 peer; controlled v1 and future-version tests supplement version negotiation"
   },
   "reference_xray": {
     "repository": "https://github.com/XTLS/Xray-core",
@@ -130,5 +133,13 @@
     "reality": "github.com/xtls/reality v0.0.0-20261014101318-83f621788ca8",
     "shadowtls": "github.com/sagernet/sing-shadowtls v0.2.1-0.20250503051639-fcd445d33c11",
     "stage": "Independent loopback test servers; never linked into Solaris"
+  },
+  "reference_sing_tun": {
+    "repository": "https://github.com/SagerNet/sing-tun",
+    "version": "v0.9.6",
+    "revision": "ddaa4ca25e3bcb776d6ce81f4477b3becb5426de",
+    "url": "https://codeload.github.com/SagerNet/sing-tun/tar.gz/ddaa4ca25e3bcb776d6ce81f4477b3becb5426de",
+    "sha256": "90c3faa6d5940adbd30d09cbae50915c879caa016c398c3758185cf9a5a9a9ac",
+    "stage": "Platform and system TCP NAT implementation reference; not linked into Solaris"
   }
 }

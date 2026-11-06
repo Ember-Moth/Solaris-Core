@@ -5,7 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #x); abort(); } } while (0)
-enum { MULTIPLEX, REUSE, BLAST, CANCEL_PART, STOP_PART, ALLOCATE, LATE_OPEN, IDLE, LATEST };
+enum { MULTIPLEX, REUSE, BLAST, CANCEL_PART, STOP_PART, ALLOCATE, LATE_OPEN, IDLE, LATEST,
+    PERIODIC, MIN_IDLE, MIN_IDLE_STOP, ACK_TIMEOUT, ACK_LATE };
 typedef struct environment environment_t;
 typedef struct channel {
     environment_t *env;
@@ -58,7 +59,7 @@ static solaris_status_t add(codec_t *c, const uint8_t *p, size_t n, solaris_sess
 static solaris_status_t codec_start(void *state, solaris_session_batch_t *out)
 { const uint8_t p[3] = {0, 0, 0}; return add(state, p, 3u, out); }
 static solaris_status_t codec_open(void *state, uint32_t id, const solaris_address_t *peer, int *ack, solaris_session_batch_t *out)
-{ (void)peer; codec_t *c = state; uint8_t p[3] = {1, (uint8_t)id, 0}; *ack = c->env->mode == LATE_OPEN; return add(c, p, 3u, out); }
+{ (void)peer; codec_t *c = state; uint8_t p[3] = {1, (uint8_t)id, 0}; *ack = c->env->mode == LATE_OPEN || ((c->env->mode == ACK_TIMEOUT || c->env->mode == ACK_LATE) && id == 2u); return add(c, p, 3u, out); }
 static solaris_status_t codec_write(void *state, uint32_t id, const solaris_slice_t *data, solaris_session_batch_t *out)
 {
     codec_t *c = state; CHECK(data->length == 7u); uint8_t p[10] = {2, (uint8_t)id, 7};
@@ -72,6 +73,7 @@ static solaris_status_t codec_decode(void *state, const uint8_t *p, size_t n, si
     codec_t *c = state; *used = 0u;
     if (n != 0u && p[0] == 255u) return SOLARIS_EIO;
     if (n < 3u || n < (size_t)p[2] + 3u) return SOLARIS_EAGAIN;
+    if (p[0] == 4u) { event->kind = SOLARIS_SESSION_READY; event->id = p[1]; *used = 3u; return SOLARIS_OK; }
     CHECK(p[0] == 2u); event->kind = SOLARIS_SESSION_DATA; event->id = p[1];
     solaris_status_t rc = solaris_buffer_copy(c->budget, p + 3, p[2], &event->data);
     if (rc == SOLARIS_OK) *used = 3u + p[2]; return rc;
@@ -108,10 +110,14 @@ static void mock_written(void *context)
         while (m->output_size >= 3u && m->output_size >= 3u + (size_t)m->output[2]) {
             size_t size = 3u + m->output[2];
             CHECK(m->output[0] <= 3u);
-            if (m->output[0] == 1u) { m->syn++; CHECK(m->output[1] == m->syn); }
+            if (m->output[0] == 1u) {
+                m->syn++; CHECK(m->output[1] == m->syn);
+                if ((m->env->mode == ACK_TIMEOUT || m->env->mode == ACK_LATE) && m->syn == 2u)
+                    solaris_test_event_signal(&m->env->pending);
+            }
             if (m->output[0] == 2u) {
                 m->data++; CHECK(size == 10u && memcmp(m->output + 3, "payload", 7u) == 0);
-                if (m->env->mode == MULTIPLEX || m->env->mode == REUSE || m->env->mode == IDLE || m->env->mode == LATEST) {
+                if (m->env->mode == MULTIPLEX || m->env->mode == REUSE || m->env->mode == IDLE || m->env->mode == LATEST || m->env->mode >= PERIODIC) {
                     CHECK(m->input_size + size <= sizeof(m->input)); memcpy(m->input + m->input_size, m->output, size); m->input_size += size;
                 }
             }
@@ -188,7 +194,9 @@ static void closed(void *context, solaris_stream_t *stream, solaris_status_t sta
     atomic_fetch_add(&e->closed, 1u);
     if (e->mode == LATEST && e->closes == 2u) { open_next(e, 2u); return; }
     if (e->mode == REUSE && e->closes < 3u) { open_next(e, e->closes); return; }
-    if (e->mode == IDLE && e->closes == 1u) { solaris_test_event_signal(&e->idle_ready); return; }
+    if ((e->mode == ACK_TIMEOUT || e->mode == ACK_LATE) && e->closes < 3u) { open_next(e, e->closes); return; }
+    if ((e->mode == IDLE || e->mode == PERIODIC) && e->closes == 1u) { solaris_test_event_signal(&e->idle_ready); return; }
+    if ((e->mode == MIN_IDLE || e->mode == MIN_IDLE_STOP) && e->closes == 2u) { solaris_test_event_signal(&e->idle_ready); return; }
     if (e->closes == e->rounds) solaris_session_pool_retire(e->pool);
 }
 static const solaris_stream_callbacks_t callbacks = {opened, data, NULL, writable, closed};
@@ -204,23 +212,42 @@ static void start(void *context, solaris_status_t status)
     environment_t *e = context; CHECK(status == SOLARIS_OK);
     solaris_session_pool_options_t options = {.carrier = {.context = e, .open = mock_factory}, .codec = &codec, .parameters = e,
         .dialer = {.pending_byte_limit = 7u, .pending_request_limit = 1u, .open_timeout_ms = 10u},
-        .session_limit = 4u, .streams_per_session = e->mode == LATEST ? 1u : 2u, .idle_timeout_ms = 10u, .on_close = pool_closed, .context = e};
+        .session_limit = 4u, .streams_per_session = e->mode == LATEST || e->mode >= PERIODIC ? 1u : 2u,
+        .idle_timeout_ms = 10u, .on_close = pool_closed, .context = e};
+    if (e->mode == PERIODIC) options.idle_check_interval_ms = 30u;
+    if (e->mode == MIN_IDLE || e->mode == MIN_IDLE_STOP) { options.idle_check_interval_ms = 20u; options.min_idle_sessions = 1u; }
+    if (e->mode == ACK_TIMEOUT || e->mode == ACK_LATE) options.ack_timeout_fails_session = 1;
     CHECK(solaris_address_parse("127.0.0.1", 443u, &options.peer) == SOLARIS_OK);
     CHECK(solaris_session_pool_create(e->owner, &options, &e->pool) == SOLARIS_OK);
     e->fail_at = e->failure; e->fail_count = 0;
     open_next(e, 0u);
     e->fail_at = 0;
-    if (e->mode == MULTIPLEX || e->mode == BLAST || e->mode == LATEST) open_next(e, 1u);
+    if (e->mode == MULTIPLEX || e->mode == BLAST || e->mode == LATEST || e->mode == MIN_IDLE || e->mode == MIN_IDLE_STOP) open_next(e, 1u);
     solaris_test_event_signal(&e->ready);
 }
 static void cancel(void *context, solaris_status_t status)
 { environment_t *e = context; CHECK(status == SOLARIS_OK && solaris_stream_close(e->channels[0].stream) == SOLARIS_OK); solaris_test_event_signal(&e->cancelled); }
 static void idle_next(void *context, solaris_status_t status)
 { CHECK(status == SOLARIS_OK); open_next(context, 1u); }
+static void clock_changed(void *context, solaris_status_t status)
+{
+    environment_t *e = context; CHECK(status == SOLARIS_OK);
+    if (e->mode == ACK_LATE) {
+        mock_t *m = &e->mocks[0]; uint8_t wire[3] = {4u, 2u, 0u}; solaris_buffer_t *buffer;
+        CHECK(solaris_buffer_copy(e->budget, wire, sizeof(wire), &buffer) == SOLARIS_OK);
+        m->callbacks.on_data(m->context, &m->stream, buffer); solaris_buffer_release(buffer);
+    }
+}
+static void reuse_retained(void *context, solaris_status_t status)
+{
+    environment_t *e = context; CHECK(status == SOLARIS_OK && e->mocks[0].closing && !e->mocks[1].closing);
+    open_next(e, 2u);
+}
 static void run(int mode, int failure)
 {
     environment_t e = {.mode = mode, .failure = failure}; atomic_init(&e.clock, 0u); atomic_init(&e.closed, 0u);
-    e.rounds = (mode == REUSE || mode == LATEST) ? 3u : mode == MULTIPLEX || mode == BLAST || mode == IDLE ? 2u : 1u;
+    e.rounds = (mode == REUSE || mode == LATEST || mode == MIN_IDLE || mode == ACK_TIMEOUT || mode == ACK_LATE) ? 3u :
+        mode == MULTIPLEX || mode == BLAST || mode == IDLE || mode == PERIODIC || mode == MIN_IDLE_STOP ? 2u : 1u;
     CHECK(solaris_test_event_init(&e.ready, 0u) == 0 && solaris_test_event_init(&e.pending, 0u) == 0 &&
         solaris_test_event_init(&e.cancelled, 0u) == 0 && solaris_test_event_init(&e.complete, 0u) == 0 && solaris_test_event_init(&e.idle_ready, 0u) == 0);
     solaris_runtime_services_init(&e.services); e.services.context = &e; e.services.allocate = allocate; e.services.now_ns = clock_now;
@@ -234,9 +261,17 @@ static void run(int mode, int failure)
         else { CHECK(solaris_executor_begin_quiesce(e.owner) == SOLARIS_OK); solaris_test_event_wait(&e.cancelled); }
         CHECK(atomic_load(&e.closed) == 0u);
         queue(&e, &e.release, mock_written, &e.mocks[0]);
-    } else if (mode == IDLE) {
+    } else if (mode == IDLE || mode == PERIODIC) {
         solaris_test_event_wait(&e.idle_ready); atomic_store(&e.clock, UINT64_C(21000000));
         CHECK(solaris_executor_post(e.owner, idle_next, &e) == SOLARIS_OK);
+    } else if (mode == MIN_IDLE || mode == MIN_IDLE_STOP) {
+        solaris_test_event_wait(&e.idle_ready); atomic_store(&e.clock, UINT64_C(21000000));
+        CHECK(solaris_executor_post(e.owner, clock_changed, &e) == SOLARIS_OK); solaris_test_event_wait(&e.cancelled);
+        if (mode == MIN_IDLE) CHECK(solaris_executor_post(e.owner, reuse_retained, &e) == SOLARIS_OK);
+        else CHECK(solaris_executor_begin_quiesce(e.owner) == SOLARIS_OK);
+    } else if (mode == ACK_TIMEOUT || mode == ACK_LATE) {
+        solaris_test_event_wait(&e.pending); atomic_store(&e.clock, UINT64_C(21000000));
+        CHECK(solaris_executor_post(e.owner, clock_changed, &e) == SOLARIS_OK);
     }
     solaris_test_event_wait(&e.complete);
     CHECK(solaris_executor_quiesce(e.owner) == SOLARIS_OK && solaris_executor_destroy(e.owner) == SOLARIS_OK);
@@ -246,6 +281,14 @@ static void run(int mode, int failure)
         if (mode == REUSE) CHECK(e.carriers == 1u && e.mocks[0].syn == 3u && e.mocks[0].fin == 3u);
         if (mode == MULTIPLEX) CHECK(e.carriers == 1u && e.mocks[0].data == 2u);
         if (mode == IDLE) CHECK(e.carriers == 2u);
+        if (mode == PERIODIC) CHECK(e.carriers == 1u && e.mocks[0].syn == 2u);
+        if (mode == MIN_IDLE) CHECK(e.carriers == 2u && e.mocks[0].syn == 1u && e.mocks[1].syn == 2u && e.mocks[0].closing && e.mocks[1].closing);
+        if (mode == MIN_IDLE_STOP) CHECK(e.carriers == 2u && e.mocks[0].closing && e.mocks[1].closing);
+        if (mode == ACK_TIMEOUT || mode == ACK_LATE) {
+            CHECK(e.channels[1].open_status == SOLARIS_ETIMEDOUT && e.channels[1].close_status == SOLARIS_ETIMEDOUT);
+            CHECK(e.carriers == 2u && e.mocks[0].syn == 2u && e.mocks[0].data == 1u && e.mocks[0].fin == 1u);
+            CHECK(e.mocks[1].syn == 1u && e.mocks[1].data == 1u && e.callbacks == 2u);
+        }
         if (mode == LATEST) CHECK(e.carriers == 2u && e.mocks[0].syn == 1u && e.mocks[1].syn == 2u);
         if (mode == CANCEL_PART) CHECK(e.mocks[0].data == 1u && e.mocks[0].fin == 1u && e.mocks[0].output_size == 0u && e.callbacks == 1u);
         if (mode == STOP_PART) CHECK(e.channels[0].close_status == SOLARIS_ECANCELLED && e.callbacks == 1u);
@@ -258,7 +301,7 @@ static void run(int mode, int failure)
 }
 int main(void)
 {
-    for (int mode = MULTIPLEX; mode <= LATEST; ++mode) if (mode != ALLOCATE) run(mode, 0);
+    for (int mode = MULTIPLEX; mode <= ACK_LATE; ++mode) if (mode != ALLOCATE) run(mode, 0);
     for (int failure = 1; failure <= 16; ++failure) run(ALLOCATE, failure);
-    puts("session: multiplex, reuse, idle expiry, failure blast, split-write cancel/stop, allocation and deadlines passed"); return 0;
+    puts("session: multiplex, latest reuse, periodic/min-idle cleanup, ACK timeout/late reply eviction, retire/stop and allocation passed"); return 0;
 }

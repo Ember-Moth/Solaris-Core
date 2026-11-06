@@ -77,22 +77,6 @@ static solaris_status_t open_stream(void *state, const solaris_address_t *destin
     return solaris_filter_open(vless->outbound.owner, &factory, &vless->transport.dialer, &vless->transport.server,
         &solaris_vless_stream_codec, &parameters, callbacks, context, out);
 }
-static solaris_status_t open_mux(void *context, solaris_executor_t *owner,
-    const solaris_dialer_options_t *options, const solaris_address_t *peer,
-    const solaris_stream_callbacks_t *callbacks, void *callback_context, solaris_stream_t **out)
-{
-    (void)peer; vless_outbound_t *vless = context;
-    solaris_vless_parameters_t parameters = {.command = 3u}; memcpy(parameters.uuid, vless->uuid, 16u);
-    solaris_stream_factory_t factory = {.context = vless, .open = open_carrier};
-    if (vless->vision) {
-        parameters.vision = 1u;
-        solaris_vless_vision_parameters_t vision = {.request = parameters, .crypto = vless->crypto};
-        return solaris_filter_open(owner, &factory, options, &vless->transport.server,
-            &solaris_vless_vision_codec, &vision, callbacks, callback_context, out);
-    }
-    return solaris_filter_open(owner, &factory, options, &vless->transport.server,
-        &solaris_vless_stream_codec, &parameters, callbacks, callback_context, out);
-}
 static solaris_status_t open_datagram(void *state, uint32_t family,
     const solaris_datagram_callbacks_t *callbacks, void *context, solaris_datagram_t **out)
 {
@@ -100,10 +84,12 @@ static solaris_status_t open_datagram(void *state, uint32_t family,
     if (vless->retired) return SOLARIS_ECLOSED;
     if (family != SOLARIS_ADDRESS_IPV4 && family != SOLARIS_ADDRESS_IPV6 && family != SOLARIS_ADDRESS_DOMAIN)
         return SOLARIS_EINVAL;
-    solaris_stream_factory_t factory = {.context = vless, .open = open_mux};
-    int reject_udp443 = vless->vision && !vless->allow_udp443;
-    return solaris_datagram_stream_open(vless->outbound.owner, &factory, &vless->transport.dialer,
-        &vless->transport.server, &solaris_vless_xudp_codec, &reject_udp443, callbacks, context, out);
+    solaris_vless_datagram_parameters_t parameters = {
+        .transport = vless->transport, .encryption = vless->encryption, .crypto = vless->crypto,
+        .vision = vless->vision, .reject_udp443 = vless->vision && !vless->allow_udp443
+    };
+    memcpy(parameters.uuid, vless->uuid, sizeof(parameters.uuid));
+    return solaris_vless_datagram_open(vless->outbound.owner, &parameters, callbacks, context, out);
 }
 static void retire(void *state) { ((vless_outbound_t *)state)->retired = 1; }
 static const solaris_outbound_ops_t outbound_ops = {capabilities, open_stream, open_datagram, retire};

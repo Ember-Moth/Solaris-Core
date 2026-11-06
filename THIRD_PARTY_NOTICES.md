@@ -76,3 +76,20 @@ loopback test servers. Their exact module versions and checksums are in
 binaries are not linked into or installed with the Solaris SDK. The native
 protocol test clients consume BoringSSL and the already attributed BLAKE3
 implementation; protocol references are listed in `docs/development/TLS_BACKEND.md`.
+
+## lwIP TCP stack and platform reference
+
+Enabling `SOLARIS_ENABLE_TUN_LWIP` links lwIP 2.2.1, commit
+`77dcd25a72509eb83f72b033d219b1d40cd8eb95`, under its BSD-3-Clause license.
+The archive checksum is locked in `dependencies/lock.json`. Solaris compiles
+selected raw TCP/IP sources with private symbols and a custom allocator;
+the upstream `COPYING` file is installed in `share/Solaris/licenses/lwip/`.
+
+https://github.com/lwip-tcpip/lwip
+
+SagerNet sing-tun v0.9.6, commit
+`ddaa4ca25e3bcb776d6ce81f4477b3becb5426de`, was consulted as the system TCP NAT,
+Apple TUN and Wintun behavior reference. Its source is GPL-3.0-or-later;
+it is not linked into or distributed with the Solaris SDK.
+
+https://github.com/SagerNet/sing-tun

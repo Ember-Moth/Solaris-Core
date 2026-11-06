@@ -306,6 +306,78 @@
         "io",
         "runtime"
       ]
+    },
+    {
+      "name": "ip_packet",
+      "sources": [
+        "src/codec/ip/packet.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "io"
+      ]
+    },
+    {
+      "name": "tcp_relay",
+      "sources": [
+        "src/flow/tcp/relay.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "io",
+        "runtime"
+      ]
+    },
+    {
+      "name": "tun",
+      "option": "SOLARIS_ENABLE_TUN",
+      "sources": [
+        "src/adapters/inbound/tun/inbound.c",
+        "src/platform/tun/device.c",
+        "src/platform/tun/posix.c",
+        "src/platform/tun/wintun.c",
+        "src/platform/tun/wintun_loader.c"
+      ],
+      "dependencies": [
+        "libuv"
+      ],
+      "requires": [
+        "runtime",
+        "io",
+        "ip_packet",
+        "tcp_relay",
+        "udp_association"
+      ]
+    },
+    {
+      "name": "tun_lwip",
+      "option": "SOLARIS_ENABLE_TUN_LWIP",
+      "sources": [
+        "src/stack/tun/lwip/stack.c"
+      ],
+      "dependencies": [
+        "lwip"
+      ],
+      "requires": [
+        "runtime",
+        "io",
+        "ip_packet",
+        "tun"
+      ]
+    },
+    {
+      "name": "tun_system",
+      "option": "SOLARIS_ENABLE_TUN_SYSTEM",
+      "sources": [
+        "src/stack/tun/system/stack.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "runtime",
+        "io",
+        "tun",
+        "ip_packet"
+      ]
     }
   ],
   "public_headers": [

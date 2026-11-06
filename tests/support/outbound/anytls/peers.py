@@ -29,6 +29,8 @@ def main():
     assert args.version.removeprefix('v') in version
     sockets, threads, failures, complete = [], [], [], []
     controlled_sessions = []
+    heart_responses = []
+    legacy_datagrams = []
     stop = threading.Event()
     peer = None
 
@@ -76,8 +78,25 @@ def main():
     def frame(command, stream=0, data=b''):
         return struct.pack('!BIH', command, stream, len(data)) + data
 
+    def address_size(data, offset=0, standard=False):
+        if len(data) <= offset:
+            return None
+        kind = data[offset]
+        ipv4, ipv6, domain = (1, 4, 3) if standard else (0, 1, 2)
+        if kind == ipv4:
+            size = 7
+        elif kind == ipv6:
+            size = 19
+        else:
+            assert kind == domain
+            if len(data) < offset + 2:
+                return None
+            size = 4 + data[offset + 1]
+        return size if len(data) >= offset + size else None
+
     def controlled(conn, tls, mode):
         streams, last_id, complete_count = {}, 0, 0
+        uot_requested = False
         try:
             with tls.wrap_socket(conn, server_side=True) as wire:
                 wire.settimeout(5)
@@ -106,8 +125,16 @@ def main():
                         settings = True
                         assert b'v=2' in data and b'client=Solaris/0.1.0' in data
                         response = frame(10, data=b'v=2') + frame(6, data=b'stop=2\n0=41-41\n1=42-42')
-                        if mode == 'version':
+                        if mode == 'uot-v1':
+                            response = b''
+                        elif mode == 'v1':
+                            response = frame(6, data=b'stop=2\n0=41-41\n1=42-42')
+                        elif mode == 'v1-settings':
                             response = frame(10, data=b'v=1')
+                        elif mode == 'future':
+                            response = frame(10, data='v=3\nimplementation=测试'.encode())
+                        elif mode == 'version':
+                            response = frame(10, data=b'v=0')
                         elif mode == 'unknown':
                             response = frame(255)
                         elif mode == 'truncated':
@@ -115,6 +142,8 @@ def main():
                             return
                         for part in range(0, len(response), 3):
                             wire.sendall(response[part:part+3])
+                        if mode == 'reuse':
+                            wire.sendall(frame(8, 0xabcdef))
                         continue
                     if command == 1:
                         assert settings and not data and stream > last_id
@@ -124,16 +153,57 @@ def main():
                     if command == 2:
                         assert stream in streams
                         if streams[stream] is None:
-                            assert len(data) == 7 and data[0] == 1
+                            if mode == 'uot-v1':
+                                magic = b'sp.v2.udp-over-tcp.arpa'
+                                assert data == bytes([3, len(magic)]) + magic + b'\0\0'
+                            else:
+                                assert len(data) == 7 and data[0] == 1
                             streams[stream] = bytearray()
-                            wire.sendall(frame(7, stream, b'refused' if mode == 'denied' else b''))
+                            if mode not in ['v1', 'v1-settings', 'uot-v1']:
+                                wire.sendall(frame(7, stream, b'refused' if mode == 'denied' else b''))
                         else:
                             streams[stream].extend(data)
-                            wire.sendall(frame(2, stream, data))
+                            if mode == 'uot-v1':
+                                pending = streams[stream]
+                                if not uot_requested:
+                                    assert pending[0] == 0
+                                    size = address_size(pending, 1, standard=True)
+                                    if size is None:
+                                        continue
+                                    del pending[:size + 1]
+                                    uot_requested = True
+                                while pending:
+                                    size = address_size(pending)
+                                    if size is None or len(pending) < size + 2:
+                                        break
+                                    length = struct.unpack('!H', pending[size:size + 2])[0]
+                                    total = size + 2 + length
+                                    if len(pending) < total:
+                                        break
+                                    # Independent UoT echo server: preserve each
+                                    # packet's address, including empty payloads.
+                                    response = bytes(pending[:total])
+                                    del pending[:total]
+                                    for part in range(0, len(response), 997):
+                                        wire.sendall(frame(2, stream, response[part:part + 997]))
+                                    complete_count += 1
+                            elif mode != 'denied':
+                                wire.sendall(frame(2, stream, data))
                         continue
                     if command == 3:
-                        assert not data and streams.pop(stream) == PAYLOAD
+                        assert not data
+                        content = streams.pop(stream)
+                        if mode == 'denied':
+                            continue
+                        if mode == 'uot-v1':
+                            assert uot_requested and not content and complete_count == 7
+                            continue
+                        assert content == PAYLOAD
                         complete_count += 1
+                        continue
+                    if command == 9:
+                        assert mode == 'reuse' and stream == 0xabcdef and not data
+                        heart_responses.append(True)
                         continue
                     raise AssertionError(f'unexpected command {command}')
         except (EOFError, ConnectionError, OSError):
@@ -142,8 +212,10 @@ def main():
             failures.append(f'controlled {mode}: {exc!r}')
         finally:
             conn.close()
-            if mode == 'reuse':
-                controlled_sessions.append(complete_count)
+            if mode in ['reuse', 'v1', 'v1-settings', 'future']:
+                controlled_sessions.append((mode, complete_count))
+            if mode == 'uot-v1':
+                legacy_datagrams.append(complete_count)
 
     def listen_controlled(sock, tls, mode):
         while not stop.is_set():
@@ -227,7 +299,7 @@ def main():
                     run([args.association_client, 'anytls', str(port), PASSWORD, '-',
                          *(str(s.getsockname()[1]) for s in sockets[2:]), '6', 'localhost', 'uot', str(cert)])
                 tls.load_cert_chain(cert, key)
-                for mode in ['reuse', 'version', 'unknown', 'truncated', 'denied']:
+                for mode in ['reuse', 'v1', 'v1-settings', 'future', 'uot-v1', 'version', 'unknown', 'truncated', 'denied']:
                     sock = socket.socket()
                     sock.bind(('127.0.0.1', 0))
                     sock.listen(8)
@@ -236,20 +308,28 @@ def main():
                     thread = threading.Thread(target=listen_controlled, args=(sock, tls, mode), daemon=True)
                     threads.append(thread)
                     thread.start()
+                    if mode == 'uot-v1':
+                        for variant in [0, 4, 5]:
+                            run([args.udp_client, 'anytls', str(sock.getsockname()[1]), PASSWORD, '-',
+                                 *(str(s.getsockname()[1]) for s in sockets[2:5]), str(variant), '127.0.0.1', 'uot', str(cert)])
+                        continue
+                    success = mode in ['reuse', 'v1', 'v1-settings', 'future']
                     command = [args.client, 'anytls', str(sock.getsockname()[1]), '127.0.0.1',
-                               str(sockets[0].getsockname()[1]), PASSWORD, '-', str(cert), '0' if mode == 'reuse' else '3']
-                    if mode == 'reuse':
+                               str(sockets[0].getsockname()[1]), PASSWORD, '-', str(cert), '0' if success else '3']
+                    if success:
                         command.append('3')
                     run(command)
                 until = time.monotonic() + 3
-                while len(controlled_sessions) < 2 and time.monotonic() < until:
+                while len(controlled_sessions) < 8 and time.monotonic() < until:
                     time.sleep(.01)
-                assert controlled_sessions == [3, 3], controlled_sessions
+                assert sorted(controlled_sessions) == sorted((mode, 3) for mode in ['reuse', 'v1', 'v1-settings', 'future'] for _ in range(2)), controlled_sessions
+                assert len(heart_responses) == 2, heart_responses
+                assert legacy_datagrams == [7] * 6, legacy_datagrams
                 until = time.monotonic() + 3
                 while len(complete) < 12 and time.monotonic() < until:
                     time.sleep(.01)
                 assert not failures and len(complete) == 12, (failures, len(complete))
-                print('AnyTLS TCP/UoT: two workers, IPv4/IPv6/domain, empty packets, backpressure and cancellation passed')
+                print('AnyTLS TCP/UoT: v1/v2/future negotiation, heartbeat, reuse, two workers, IPv4/IPv6/domain, backpressure and cancellation passed')
         finally:
             stop.set()
             for sock in sockets:

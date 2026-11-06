@@ -92,6 +92,10 @@ def main():
                 header = exact(conn, length)
                 if header[:5] != b"\0\0" + bytes([1 if first else 2, 1, 2]):
                     raise AssertionError(f"invalid XUDP metadata: {header.hex()}")
+                if first:
+                    if len(header) < 16 or header[-8:] == bytes(8):
+                        raise AssertionError("missing XUDP GlobalID")
+                    header = header[:-8]
                 first = False
                 port = struct.unpack("!H", header[5:7])[0]
                 kind = header[7]

@@ -36,7 +36,7 @@ func fixtureAEAD(method int, salt []byte) cipher.AEAD {
 	} else if _, err := io.ReadFull(hkdf.New(sha1.New, key, salt, []byte("ss-subkey")), subkey); err != nil {
 		panic(err)
 	}
-	if method == 2 {
+	if method == 2 || method == 5 {
 		aead, err := chacha20poly1305.New(subkey)
 		if err != nil {
 			panic(err)
@@ -112,7 +112,25 @@ func generateFixtures(directory string) {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		panic(err)
 	}
-	for method := 0; method < 5; method++ {
+	for method := 3; method < 6; method++ {
+		depths := []int{0, 1, 2, 8}
+		if method == 5 {
+			depths = []int{0}
+		}
+		for _, depth := range depths {
+			for _, packet := range []bool{false, true} {
+				kind := "stream"
+				if packet {
+					kind = "packet"
+				}
+				path := filepath.Join(directory, fmt.Sprintf("request-%s-%d-%d.bin", kind, method, depth))
+				if err := os.WriteFile(path, requestFixture(method, depth, packet), 0600); err != nil {
+					panic(err)
+				}
+			}
+		}
+	}
+	for method := 0; method < 6; method++ {
 		for variant := 0; variant < 10; variant++ {
 			path := filepath.Join(directory, fmt.Sprintf("stream-%d-%d.bin", method, variant))
 			if err := os.WriteFile(path, streamFixture(method, variant), 0600); err != nil {
@@ -190,11 +208,22 @@ func packetFixture(method, variant int) []byte {
 		if variant == 5 {
 			plain[17] = 0xff
 		}
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			panic(err)
+		if method == 5 {
+			plain = append(append([]byte(nil), prefix...), plain...)
+			nonce = bytes.Repeat([]byte{byte(99 + variant)}, 24)
+			prefix = append([]byte(nil), nonce...)
+			var err error
+			aead, err = chacha20poly1305.NewX(key)
+			if err != nil {
+				panic(err)
+			}
+		} else {
+			block, err := aes.NewCipher(key)
+			if err != nil {
+				panic(err)
+			}
+			block.Encrypt(prefix, prefix)
 		}
-		block.Encrypt(prefix, prefix)
 	}
 	plain = append(plain, address...)
 	plain = append(plain, payload...)
@@ -206,4 +235,85 @@ func packetFixture(method, variant int) []byte {
 		result = result[:len(result)-1]
 	}
 	return result
+}
+
+// Independent Go primitives exercise outgoing byte layout, including every
+// identity layer. The live peer separately validates these against its parser.
+func requestFixture(method, depth int, packet bool) []byte {
+	user := fixtureKey(method)
+	keys := make([][]byte, depth+1)
+	for i := 0; i < depth; i++ {
+		keys[i] = bytes.Repeat([]byte{byte(0x10 + i)}, len(user))
+	}
+	keys[depth] = user
+	address := append([]byte{3, 11}, []byte("example.com")...)
+	address = append(address, 1, 187)
+	var prefix, plain, nonce []byte
+	var aead cipher.AEAD
+	if packet {
+		header := append(bytes.Repeat([]byte{0x42}, 8), make([]byte, 8)...)
+		plain = make([]byte, 11)
+		binary.BigEndian.PutUint64(plain[1:], 1700000000)
+		if method == 5 {
+			plain = append(header, plain...)
+			prefix = bytes.Repeat([]byte{0x42}, 24)
+			nonce = prefix
+			var err error
+			aead, err = chacha20poly1305.NewX(user)
+			if err != nil {
+				panic(err)
+			}
+		} else {
+			prefix = make([]byte, 16)
+			block, err := aes.NewCipher(keys[0])
+			if err != nil {
+				panic(err)
+			}
+			block.Encrypt(prefix, header)
+			for i := 0; i < depth; i++ {
+				hash := blake3.Sum256(keys[i+1])
+				identity := make([]byte, 16)
+				for n := range identity {
+					identity[n] = hash[n] ^ header[n]
+				}
+				block, err := aes.NewCipher(keys[i])
+				if err != nil {
+					panic(err)
+				}
+				block.Encrypt(identity, identity)
+				prefix = append(prefix, identity...)
+			}
+			nonce = header[4:]
+			aead = fixtureAEAD(method, header[:8])
+		}
+		plain = append(plain, address...)
+		plain = append(plain, []byte("hello")...)
+		return append(prefix, aead.Seal(nil, nonce, plain, nil)...)
+	}
+	salt := bytes.Repeat([]byte{0x42}, len(user))
+	prefix = append([]byte(nil), salt...)
+	for i := 0; i < depth; i++ {
+		subkey := make([]byte, len(user))
+		material := append(append([]byte(nil), keys[i]...), salt...)
+		blake3.DeriveKey(subkey, "shadowsocks 2022 identity subkey", material)
+		hash := blake3.Sum256(keys[i+1])
+		identity := make([]byte, 16)
+		block, err := aes.NewCipher(subkey)
+		if err != nil {
+			panic(err)
+		}
+		block.Encrypt(identity, hash[:16])
+		prefix = append(prefix, identity...)
+	}
+	padding := 1 + 0x4242%900
+	plain = append(address, byte(padding>>8), byte(padding))
+	plain = append(plain, bytes.Repeat([]byte{0x42}, padding)...)
+	fixed := make([]byte, 11)
+	binary.BigEndian.PutUint64(fixed[1:], 1700000000)
+	binary.BigEndian.PutUint16(fixed[9:], uint16(len(plain)))
+	aead = fixtureAEAD(method, salt)
+	nonce = make([]byte, 12)
+	prefix = append(prefix, aead.Seal(nil, nonce, fixed, nil)...)
+	nonce[0]++
+	return append(prefix, aead.Seal(nil, nonce, plain, nil)...)
 }

@@ -54,12 +54,14 @@ static solaris_status_t start(void *state, solaris_buffer_t **out)
         length += padding; fixed[0] = 0u; solaris_ss_write64(fixed + 1u, solaris_ss_time(&ss->parameters.source)); fixed_size = 11u;
     }
     fixed[fixed_size - 2u] = (uint8_t)(length >> 8); fixed[fixed_size - 1u] = (uint8_t)length;
-    size_t total = key->length + fixed_size + 16u + length + 16u;
+    size_t prefix = key->length + key->identity_count * 16u;
+    size_t total = prefix + fixed_size + 16u + length + 16u;
     rc = solaris_buffer_allocate(ss->budget, total, out);
     if (rc != SOLARIS_OK) return rc;
     uint8_t *bytes = solaris_buffer_mutable_data(*out); memcpy(bytes, ss->salt, key->length);
-    rc = seal(ss, bytes + key->length, fixed_size + 16u, fixed, fixed_size);
-    if (rc == SOLARIS_OK) rc = seal(ss, bytes + key->length + fixed_size + 16u, length + 16u, header, length);
+    rc = solaris_ss_identity_headers(key, ss->salt, NULL, bytes + key->length);
+    if (rc == SOLARIS_OK) rc = seal(ss, bytes + prefix, fixed_size + 16u, fixed, fixed_size);
+    if (rc == SOLARIS_OK) rc = seal(ss, bytes + prefix + fixed_size + 16u, length + 16u, header, length);
     if (rc == SOLARIS_OK) rc = solaris_buffer_set_length(*out, total);
     return rc;
 }
