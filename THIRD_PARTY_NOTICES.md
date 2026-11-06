@@ -17,10 +17,18 @@ The upstream license texts are kept in:
 
 ## Linked libraries
 
-The M0 SDK links only to libuv (MIT). Its source revision and archive checksum
-are fixed in `dependencies/lock.json`; its LICENSE and LICENSE-extra are
-installed with the SDK. The BLAKE3 sources and BoringSSL REALITY patch retained
-in `third_party/` are not linked into M0.
+The SDK links to libuv (MIT). Enabling the TLS module also links BoringSSL
+(ISC-style and other permissive licenses). Source revisions and archive
+checksums are fixed in `dependencies/lock.json`; their license files are
+installed with the SDK. BoringSSL is statically linked with a private symbol
+prefix, including a build-time rename of its SSL_SESSION struct tag to cover
+an upstream prefix-table omission. BoringSSL is pinned to snapshot tag
+`0.20261020.0`, exact commit `d3bf4795ad5b79d646cddf2fec687da5b9b502db`.
+The ordered, checksum-verified Solaris patches live in
+`third_party/boringssl/patches/`; they preserve the upstream license and expose
+private, opt-in TLS seams. Protocol authentication is not enabled by ordinary TLS.
+The Shadowsocks and VLESS encryption modules also link the portable BLAKE3 C backend as a private,
+prefixed static library; SIMD source files remain vendored but are not compiled.
 
 The prior implementation also used BoringSSL (ISC-style and other permissive
 licenses), lwIP (BSD-3-Clause), PCRE2 (BSD-3-Clause), nghttp2 (MIT), and llhttp

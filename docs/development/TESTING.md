@@ -56,12 +56,12 @@
 | U03 | 首次建关联多包并发：只 open 一次，队列受限，完成一次 | M1 |
 | U04 | association 固定 worker；目标改变不漂移，N 改变不直接重哈希存量 | M1 |
 | U05 | 首包 Direct/次包本应 Proxy 及反向顺序：遵循首次选路固定 | M2 |
-| U06 | native UDP/UoT/XUDP：同一入站/公共层不增加封装特判 | M1/M2，按实际支持组合 |
+| U06 | native UDP、SS/AnyTLS UoT、VLESS XUDP：同一 association/公共层不增加封装特判 | M1 内部全部路径；M2 YAML/入站接入 |
 | U07 | Fake-IP、hosts、多域名同 IP/端口：租约稳定、歧义隔离、正确恢复 | M3 |
 | U08 | 备用远端 IP/端口回复：真实 peer 保留，映射与过滤分别检查 | M1，平台验证在 M3 |
 | U09 | 空 payload、IPv4/IPv6 校验和、MTU、超长/分片策略 | datagram 在 M1，TUN codec 在 M3 |
 | U10 | idle/open/DNS deadline、生效配置、队列满与迟到回调 | 基础 M1，配置与 DNS M2/M3 |
-| U11 | SOCKS5 控制连接结束、宿主回复通道替换、网络绑定失效 | SOCKS M2，TUN M3 |
+| U11 | SOCKS5 控制连接结束、宿主回复通道替换、网络绑定失效 | outbound 控制连接 M1；入站 M2，TUN M3 |
 | U12 | 批量与普通路径：目的、顺序、统计、accepted 与内存回收一致 | M1/M3 |
 
 公网 STUN/ICE 观察是额外测试，需记录服务器、网络与代理端条件；本地 socket 复用不能被写成公网 NAT 类型保证。
@@ -78,7 +78,16 @@
 
 ## 6. 协议与解析器
 
-协议矩阵分别列出协议、传输、安全、Mux、UDP 封装、地址族和对端版本。例如 VLESS 普通 TLS 与 REALITY/Vision/XHTTP 是不同组合，编译有源码不等于每个入口可用。
+协议矩阵分别列出协议、传输、安全、encryption、flow、Mux、UDP 封装、地址族和对端版本。例如裸 VLESS/plain、裸 VLESS/TLS、VLESS encryption、Vision/TLS、Vision/encryption 需要分别登记；REALITY/XHTTP 等额外组合不从这些结果推导。编译有源码不等于每个入口可用。
+
+M1-06 必须分别取得以下证据，完成状态由 [开发计划](DEVELOPMENT_PLAN.md#m1-06-协议范围与退出条件) 记录：
+
+- VLESS encryption：固定支持该层的 Xray 对端，记录参数与版本；验证错误凭据、密文篡改/截断、重放、握手 deadline、取消与开启的会话恢复模式。普通 TLS 互通不覆盖协议加密。
+- `xtls-rprx-vision`：固定支持该 flow 的独立对端；验证 padding/内层 TLS 识别、raw 切换前后顺序和缓冲交接、暂停/背压/关闭及 UDP 443 策略。允许的 TLS/encryption 承载组合逐项验证，禁止直接强转后端私有对象。
+- VLESS XUDP：经 registry/factory 和公共 association 验证多目的 A/B/A、IPv4/IPv6/domain、真实 peer、空包、拆粘包/截断、会话标识隔离、取消和底层断流后的完成回调排空。不能以传统单目的 UDP 或 UoT 冒充 XUDP。
+- 共享 UoT v2：独立 codec fixture 与对端分别验证地址/长度、空包、拆粘包/截断、有界排队及异常关闭；SS 每种受支持 cipher 的加密 stream、AnyTLS session 子流分别运行互通和 lifecycle 测试。SS 原生 UDP 成功、或只有 AnyTLS UoT 成功，均不覆盖 SS UoT；配置选择失败不得静默回退。
+
+裸 VLESS、encryption、flow 和 UDP 方案的配置有效性、未知值、缺少所需 carrier 能力都必须经过模块工厂验证。至少两个 worker 上运行受支持组合，且保持实例/配置退休后活动通道的独立寿命。
 
 对拆包/粘包、截断、畸形长度、错误认证、重复报文、乱序、超长输入、背压和异常关闭建立回归。解析器/framing 使用 fuzz，生命周期使用 ASan/UBSan；线程检测按平台能力执行。密码运算调用既有密码库，测试协议调用与状态使用的正确性。
 
@@ -95,3 +104,27 @@
 每次验收至少保存：代码提交、参考/依赖版本、平台/工具链、精确命令或脚本、测试 ID、通过/失败/未执行、日志/产物位置与剩余限制。失败修复后针对相关行为复测；没有新变化或疑点不重复扩大测试。
 
 只有对应交付物和验收证据完整时，才能在开发计划中标完成。构建通过、接口 smoke、模拟包和真机结果分开填写。
+
+## 9. Parser fuzz 复现
+
+使用带 libFuzzer runtime 的原生 Clang/Clang++；该开关构建独立插桩 core，不改变正常 SDK 的编译参数。
+
+```sh
+cmake -S . -B build-fuzz -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSOLARIS_BUILD_FUZZERS=ON -DSOLARIS_BUILD_EXAMPLES=OFF
+cmake --build build-fuzz --parallel --target solaris_parser_fuzz solaris_vless_encryption_tests solaris_ss_control_peer solaris_encryption_control_peer
+python3 tests/fuzz/seeds.py build-fuzz/seeds --ss-control build-fuzz/reference-tools/ss-control --encryption-control build-fuzz/reference-tools/encryption-control --encryption-client build-fuzz/solaris_vless_encryption_tests
+mkdir -p build-fuzz/corpus build-fuzz/artifacts
+build-fuzz/solaris_parser_fuzz build-fuzz/corpus build-fuzz/seeds -dict=tests/fuzz/protocols.dict -max_total_time=60 -max_len=196608 -timeout=5 -rss_limit_mb=2048 -print_final_stats=1 -artifact_prefix=build-fuzz/artifacts/
+```
+
+入口覆盖地址、UoT/XUDP、VLESS/Vision、SS TCP/UDP、SOCKS5 握手/UDP、AnyTLS padding/session、VLESS encryption 配置/记录/握手、HTTP URL/响应和模块配置。输入包含 parser/variant/分配失败索引，逐次核对预算归零；没有网络或 executor 活动。保留失败 artifact 和命令，修复后以原 artifact 回放，再恢复变异运行。机制见 [LLVM libFuzzer 文档](https://llvm.org/docs/LibFuzzer.html)。有限时长运行不代表所有输入或平台已被穷尽。
+
+
+TLS 基线和补丁有独立的 `tls_patch_contract`、`tls_recipe_contract`，范围见 [TLS 后端](TLS_BACKEND.md)。
+`tls_contract` 包含确定性的停止边界：底层 open 已通知 TLS、握手 pump 已排队，此时先关闭 admission，
+确认 scope 取消先于 pump 推进，accepted open 返回 ECANCELLED 且实际回调/资源全部排空。
+
+Xray 的 UDP 测试目标使用 `tests/support/loopback.py` 在 IPv4/IPv6 同时预留端口，防止 macOS
+双栈临时端口与单族回显 socket 重合。回显检测到源端口等于目标端口即停止并报错，不允许形成自回环洪泛。
+Shadowsocks 的 A/B/A 源端口复用按同一测试中的活动通道核对；不同测试关闭后的端口重复分配不计为协议错误。
+固定参考端的长重复检查仍可能受本机网络环境影响，必须保留同对端独立控制结果，不能以客户端重试掩盖。

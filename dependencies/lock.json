@@ -6,6 +6,22 @@
     "sha256": "768e567dcabb9a55cb88b552b3e93c723aeca1ea6d8bb9fd8ff573c2623feac3",
     "stage": "M0"
   },
+  "boringssl": {
+    "version": "0.20261020.0",
+    "revision": "d3bf4795ad5b79d646cddf2fec687da5b9b502db",
+    "url": "https://codeload.github.com/google/boringssl/tar.gz/d3bf4795ad5b79d646cddf2fec687da5b9b502db",
+    "sha256": "692c43fec31bb3a638859bf447a25bdd62ab240ff7b2fdb4210af10e32c6119f",
+    "source_tree_sha256": "a6579edd7bf0bbc7973c7b850d685e2223d11de757075457363e51764d56a4eb",
+    "patch_abi": 1,
+    "patches": [
+      {
+        "path": "third_party/boringssl/patches/0001-client-hello-auth.patch",
+        "sha256": "40813c82fe10f5996fec53a5c4b1116c4e143511e573968bce1a425c534bd79d",
+        "capability": "TLS 1.3 ClientHello random/session-ID authentication and callback-scoped X25519; ordinary TLS unchanged"
+      }
+    ],
+    "stage": "M1 private TLS/crypto; protocol authentication adapters remain separate"
+  },
   "libyaml": {
     "version": "0.2.5",
     "repository": "https://github.com/yaml/libyaml",
@@ -17,6 +33,12 @@
     "repository": "https://github.com/ibireme/yyjson",
     "revision": "8b4a38dc994a110abaec8a400615567bd996105f",
     "stage": "M2; selected, not linked in M0"
+  },
+  "reference_sing_box": {
+    "repository": "https://github.com/sagernet/sing-box",
+    "version": "v1.12.12",
+    "revision": "54ed58499d7063136ed52dabf87d179d252425d0",
+    "stage": "M1 independent test peer only; never linked into Solaris"
   },
   "reference_mihomo": {
     "repository": "https://github.com/Herta-Network/mihomo",
@@ -36,5 +58,47 @@
   "reference_original_core": {
     "revision": "f9ca89ac3cf13808463beac9b4130d6639ffb1c7",
     "stage": "implementation provenance; not compiled"
+  },
+  "blake3": {
+    "version": "1.8.5",
+    "repository": "https://github.com/BLAKE3-team/BLAKE3",
+    "revision": "8aa5145039b972ba30e98e788752d37d14568824",
+    "stage": "M1; vendored portable C backend, private prefixed static library"
+  },
+  "reference_ss_control": {
+    "stage": "M1 independent same-peer control and crypto fixtures only",
+    "module_lock": "tests/support/outbound/shadowsocks/control/go.mod and go.sum",
+    "sing_shadowsocks": "v0.2.8",
+    "blake3": "v1.3.0"
+  },
+  "reference_anytls": {
+    "module": "github.com/anytls/sing-anytls",
+    "version": "v0.0.11",
+    "via": "reference_sing_box v1.12.12 go.mod/go.sum",
+    "stage": "M1 independent peer only; AnyTLS protocol v2"
+  },
+  "reference_xray": {
+    "repository": "https://github.com/XTLS/Xray-core",
+    "version": "v26.10.31",
+    "module_version": "v1.260327.1-0.20261031132019-a4a3dff5b20c",
+    "revision": "a4a3dff5b20c2faae567b742c172c7b95e75c083",
+    "url": "https://codeload.github.com/XTLS/Xray-core/tar.gz/a4a3dff5b20c2faae567b742c172c7b95e75c083",
+    "sha256": "7dba1dd055bdc854a2c5311610872c9bf6315ddb0a741fb8c2206212cec51b53",
+    "stage": "M1 independent XUDP/encryption/Vision peer only; never linked into Solaris"
+  },
+  "reference_jls": {
+    "repository": "https://github.com/MetaCubeX/jls-tls",
+    "revision": "67adc0e2f79630fcf80f0b65278d4d1a094b812b",
+    "stage": "TLS patch design reference only; not linked and not yet an interoperability claim"
+  },
+  "reference_restls": {
+    "repository": "https://github.com/MetaCubeX/restls-client-go",
+    "revision": "6566c5f8a24420fbaeb27bc74deea2597a30f4a7",
+    "stage": "TLS patch design reference only; not linked and not yet an interoperability claim"
+  },
+  "reference_shadowtls": {
+    "repository": "https://github.com/ihciah/shadow-tls",
+    "revision": "02dd0bc7bae8a2011729f95021690e694fd8e43e",
+    "stage": "TLS patch design reference only; not linked and not yet an interoperability claim"
   }
 }

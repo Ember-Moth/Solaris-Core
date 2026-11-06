@@ -13,7 +13,9 @@ typedef uint32_t solaris_engine_state_t;
 enum {
     SOLARIS_ENGINE_IDLE = 0,
     SOLARIS_ENGINE_RUNNING = 1,
-    SOLARIS_ENGINE_STOPPED = 2
+    SOLARIS_ENGINE_STOPPED = 2,
+    SOLARIS_ENGINE_STARTING = 3,
+    SOLARIS_ENGINE_STOPPING = 4
 };
 
 typedef uint32_t solaris_operation_t;
@@ -25,12 +27,21 @@ enum {
 #define SOLARIS_TIMEOUT_INFINITE UINT64_MAX
 #define SOLARIS_DEFAULT_COMMAND_CAPACITY 32u
 #define SOLARIS_MAX_COMMAND_CAPACITY 1024u
+#define SOLARIS_MAX_IO_WORKERS 32u
+#define SOLARIS_DEFAULT_IO_QUEUE_CAPACITY 128u
+#define SOLARIS_DEFAULT_IO_RESOURCE_LIMIT 1024u
+#define SOLARIS_DEFAULT_BUFFER_LIMIT_BYTES UINT64_C(16777216)
 
 typedef struct solaris_engine_options {
-    /* Zero uses the default (one). M0 rejects values above one explicitly. */
+    /* Zero uses one worker. Valid explicit range: 1..SOLARIS_MAX_IO_WORKERS. */
     uint32_t io_workers;
     /* Pending commands, excluding a callback currently executing. */
     uint32_t command_capacity;
+    /* Zero uses defaults; queue/resource limits are per worker. */
+    uint32_t io_queue_capacity;
+    uint32_t io_resource_limit;
+    /* Shared engine quota for I/O buffers and request allocations. */
+    uint64_t buffer_limit_bytes;
 } solaris_engine_options_t;
 
 typedef struct solaris_event {
@@ -68,6 +79,9 @@ typedef struct solaris_engine_snapshot {
     uint64_t last_operation_id;
     solaris_status_t last_status;
     uint64_t uptime_ns;
+    uint64_t generation;
+    uint64_t io_buffer_bytes;
+    uint64_t io_buffer_peak_bytes;
 } solaris_engine_snapshot_t;
 
 SOLARIS_API void solaris_engine_options_init(solaris_engine_options_t *options);
@@ -89,7 +103,8 @@ SOLARIS_API solaris_status_t solaris_engine_create(
  * (and callback if installed). Failure sets *operation_id to zero and has no
  * callback. A full queue returns EBUSY without changing the requested state.
  * start rejects an already running/requested-running engine. stop is idempotent.
- * RUNNING in M0 denotes the control runtime only, not an active proxy/VPN.
+ * start activates I/O workers; stop cancels their work and waits for resources
+ * and callbacks to drain. These calls do not create listeners or a system VPN.
  */
 SOLARIS_API solaris_status_t solaris_engine_start(
     solaris_engine_t *engine, uint64_t *operation_id, solaris_error_t *error);
@@ -116,7 +131,7 @@ SOLARIS_API solaris_status_t solaris_engine_flush(
  * the owner after all callbacks return. An executing callback may finish.
  * Successful return invalidates engine and is the host-context release barrier.
  * NULL is accepted. On error ownership remains with the caller; never invoke
- * destroy from an event callback (EDEADLOCK, without changing the engine).
+ * destroy from a control or I/O callback (EDEADLOCK, without changing the engine).
  */
 SOLARIS_API solaris_status_t solaris_engine_destroy(
     solaris_engine_t *engine, solaris_error_t *error);

@@ -25,6 +25,8 @@ flowchart LR
 
 五元组用于目的子流、计数和追踪，不自动等同于独占 socket。入站只处理自身协议格式，UoT/XUDP framing 属于 outbound/shared codec。
 
+M1 的协议接入范围是：VLESS 通过 XUDP 提供 datagram；Shadowsocks 可选原生 UDP 或 UoT；AnyTLS 通过 session 子流使用 UoT。UoT codec 与流式 datagram backend 由 SS/AnyTLS 共享，不能固化为 AnyTLS 私有实现。adapter 在编译配置/构造实例时确定方案，association 仍仅调用统一 datagram 契约；失败不静默改用其他封装。当前支持状态见 [兼容矩阵](COMPATIBILITY.md)。
+
 ## 2. 身份与固定选路
 
 association key 使用规范化二进制字段：`engine + inbound 实例/代际 + 客户端或 association 身份 + 源地址族/IP/端口`。

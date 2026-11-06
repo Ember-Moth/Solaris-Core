@@ -1,0 +1,240 @@
+--- a/include/openssl/prefix_symbols.h
++++ b/include/openssl/prefix_symbols.h
+@@ -2376,6 +2376,8 @@
+ #pragma redefine_extname SSL_set1_available_trust_anchors BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_available_trust_anchors)
+ #pragma redefine_extname SSL_set1_chain BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_chain)
+ #pragma redefine_extname SSL_set1_client_key_shares BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_client_key_shares)
++#pragma redefine_extname SSL_solaris_client_hello_x25519 BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_solaris_client_hello_x25519)
++#pragma redefine_extname SSL_set_solaris_client_hello_callback BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set_solaris_client_hello_callback)
+ #pragma redefine_extname SSL_set1_curves BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_curves)
+ #pragma redefine_extname SSL_set1_curves_list BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_curves_list)
+ #pragma redefine_extname SSL_set1_ech_config_list BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_ech_config_list)
+@@ -5547,6 +5549,8 @@
+ #define SSL_set1_available_trust_anchors BORINGSSL_ADD_PREFIX(SSL_set1_available_trust_anchors)
+ #define SSL_set1_chain BORINGSSL_ADD_PREFIX(SSL_set1_chain)
+ #define SSL_set1_client_key_shares BORINGSSL_ADD_PREFIX(SSL_set1_client_key_shares)
++#define SSL_solaris_client_hello_x25519 BORINGSSL_ADD_PREFIX(SSL_solaris_client_hello_x25519)
++#define SSL_set_solaris_client_hello_callback BORINGSSL_ADD_PREFIX(SSL_set_solaris_client_hello_callback)
+ #define SSL_set1_curves BORINGSSL_ADD_PREFIX(SSL_set1_curves)
+ #define SSL_set1_curves_list BORINGSSL_ADD_PREFIX(SSL_set1_curves_list)
+ #define SSL_set1_ech_config_list BORINGSSL_ADD_PREFIX(SSL_set1_ech_config_list)
+--- a/include/openssl/ssl.h
++++ b/include/openssl/ssl.h
+@@ -2883,6 +2883,35 @@
+ OPENSSL_EXPORT int SSL_set1_client_key_shares(SSL *ssl,
+                                               const uint16_t *group_ids,
+                                               size_t num_group_ids);
++
++// Solaris private ClientHello authentication extension, ABI version 1.
++// Configure before the first handshake. This is client-side TLS 1.3 only;
++// ECH, DTLS, QUIC, early data, renegotiation and HelloRetryRequest fail closed.
++// A callback receives the complete handshake message (including its four-byte
++// header), with PSK binders zeroed. It may replace only random and session ID.
++// Binders are recomputed and the TLS state/transcript uses the final bytes.
++// No certificate or CertificateVerify validation is disabled by this API.
++// The callback is synchronous, must not re-enter SSL, and returns one on success.
++// It owns neither input nor output. |arg| must remain valid until SSL_free.
++#define BORINGSSL_SOLARIS_CLIENT_HELLO_ABI 1
++#define SSL_SOLARIS_HELLO_RANDOM 1u
++#define SSL_SOLARIS_HELLO_SESSION_ID 2u
++typedef struct ssl_solaris_client_hello_output_st {
++  uint8_t random[32];
++  uint8_t session_id[32];
++} SSL_SOLARIS_CLIENT_HELLO_OUTPUT;
++typedef int (*SSL_solaris_client_hello_callback)(
++    SSL *ssl, const uint8_t *hello, size_t hello_len,
++    SSL_SOLARIS_CLIENT_HELLO_OUTPUT *out, void *arg);
++OPENSSL_EXPORT int SSL_set_solaris_client_hello_callback(
++    SSL *ssl, unsigned fields, SSL_solaris_client_hello_callback callback,
++    void *arg);
++// Derives a shared secret using the offered X25519 key share. Only callable
++// inside the ClientHello callback. Private keys never leave the library.
++// Rejects absent X25519, low-order peers and calls outside that callback.
++// On failure, |out| is zeroed. The caller must cleanse it after use.
++OPENSSL_EXPORT int SSL_solaris_client_hello_x25519(
++    SSL *ssl, const uint8_t peer[32], uint8_t out[32]);
+ 
+ // SSL_set1_server_supported_groups_hint, when `ssl` is a client, indicates that
+ // the server is likely to support groups listed in `server_groups`, in order of
+--- a/ssl/handshake_client.cc
++++ b/ssl/handshake_client.cc
+@@ -181,6 +181,90 @@
+   return true;
+ }
+ 
++// Keep protocol authentication outside TLS. This seam only commits the
++// selected fixed-size fields and recomputes binders before transcript hashing.
++static bool solaris_authenticate_client_hello(SSL_HANDSHAKE *hs,
++                                             Array<uint8_t> *msg) {
++  SSLImpl *const ssl = hs->ssl;
++  auto *config = hs->config;
++  if (config->solaris_hello_callback == nullptr) { return true; }
++  if (config->solaris_hello_called || hs->min_version != TLS1_3_VERSION ||
++      hs->max_version != TLS1_3_VERSION || SSL_is_dtls(ssl) || SSL_is_quic(ssl) ||
++      !config->client_ech_config_list.empty() || ssl->enable_early_data ||
++      ssl->s3->initial_handshake_complete || msg->size() < 71 || (*msg)[38] != 32) {
++    OPENSSL_PUT_ERROR(SSL, SSL_R_UNSUPPORTED_PROTOCOL);
++    return false;
++  }
++  config->solaris_hello_called = true;
++
++  // The PSK extension, if present, must be last. The upstream builder has
++  // already filled binders. Zero them for protocol authentication, then redo
++  // them against the final random/session ID using the upstream binder code.
++  CBS body = CBS(Span(*msg).subspan(4)), part, extensions, binders;
++  CBS_init(&binders, nullptr, 0);
++  if (!CBS_skip(&body, 34) || !CBS_get_u8_length_prefixed(&body, &part) ||
++      !CBS_get_u16_length_prefixed(&body, &part) ||
++      !CBS_get_u8_length_prefixed(&body, &part) ||
++      !CBS_get_u16_length_prefixed(&body, &extensions) || CBS_len(&body) != 0) {
++    return false;
++  }
++  while (CBS_len(&extensions) != 0) {
++    uint16_t type;
++    if (!CBS_get_u16(&extensions, &type) ||
++        !CBS_get_u16_length_prefixed(&extensions, &part)) { return false; }
++    if (type == TLSEXT_TYPE_pre_shared_key) {
++      CBS identities;
++      if (CBS_len(&extensions) != 0 ||
++          !CBS_get_u16_length_prefixed(&part, &identities) ||
++          !CBS_get_u16_length_prefixed(&part, &binders) || CBS_len(&part) != 0) {
++        return false;
++      }
++    }
++  }
++  CBS pending = binders;
++  for (const auto &psk : hs->pre_shared_keys) {
++    if (!CBS_get_u8_length_prefixed(&pending, &part) ||
++        CBS_len(&part) != EVP_MD_size(ssl_pre_shared_key_hash(psk))) {
++      return false;
++    }
++    OPENSSL_memset(const_cast<uint8_t *>(CBS_data(&part)), 0, CBS_len(&part));
++  }
++  if (CBS_len(&pending) != 0) { return false; }
++
++  SSL_SOLARIS_CLIENT_HELLO_OUTPUT output;
++  OPENSSL_memcpy(output.random, msg->data() + 6, 32);
++  OPENSSL_memcpy(output.session_id, msg->data() + 39, 32);
++  config->solaris_hello_active = true;
++  int ok = config->solaris_hello_callback(ssl, msg->data(), msg->size(),
++                                          &output, config->solaris_hello_arg);
++  config->solaris_hello_active = false;
++  if (ok == 1) {
++    if (config->solaris_hello_fields & SSL_SOLARIS_HELLO_RANDOM) {
++      OPENSSL_memcpy(msg->data() + 6, output.random, 32);
++      OPENSSL_memcpy(ssl->s3->client_random, output.random, 32);
++    }
++    if (config->solaris_hello_fields & SSL_SOLARIS_HELLO_SESSION_ID) {
++      OPENSSL_memcpy(msg->data() + 39, output.session_id, 32);
++      hs->session_id.CopyFrom(Span(output.session_id));
++    }
++  }
++  OPENSSL_cleanse(&output, sizeof(output));
++  if (ok != 1) {
++    OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
++    return false;
++  }
++  pending = binders;
++  for (const auto &psk : hs->pre_shared_keys) {
++    if (!CBS_get_u8_length_prefixed(&pending, &part)) { return false; }
++    size_t len;
++    if (!tls13_psk_binder(hs,
++            Span(const_cast<uint8_t *>(CBS_data(&part)), CBS_len(&part)),
++            &len, psk, hs->transcript, Span(*msg).subspan(4),
++            2 + CBS_len(&binders)) || len != CBS_len(&part)) { return false; }
++  }
++  return true;
++}
++
+ bool ssl_add_client_hello(SSL_HANDSHAKE *hs) {
+   SSLImpl *const ssl = hs->ssl;
+   ScopedCBB cbb;
+@@ -193,7 +277,8 @@
+       !ssl_write_client_hello_without_extensions(hs, &body, type,
+                                                  /*empty_session_id=*/false) ||
+       !ssl_add_clienthello_tlsext(hs, &body, /*out_encoded=*/nullptr, type) ||
+-      !ssl->method->finish_message(ssl, cbb.get(), &msg)) {
++      !ssl->method->finish_message(ssl, cbb.get(), &msg) ||
++      !solaris_authenticate_client_hello(hs, &msg)) {
+     return false;
+   }
+ 
+@@ -318,6 +403,7 @@
+ static enum ssl_hs_wait_t do_start_connect(SSL_HANDSHAKE *hs) {
+   SSLImpl *const ssl = hs->ssl;
+ 
++  hs->config->solaris_handshake_started = true;
+   ssl_do_info_callback(ssl, SSL_CB_HANDSHAKE_START, 1);
+   // `session_reused` must be reset in case this is a renegotiation.
+   ssl->s3->session_reused = false;
+--- a/ssl/internal.h
++++ b/ssl/internal.h
+@@ -3405,6 +3405,13 @@
+   // ssl is a non-owning pointer to the parent `SSL` object.
+   SSLImpl *const ssl = nullptr;
+ 
++  SSL_solaris_client_hello_callback solaris_hello_callback = nullptr;
++  void *solaris_hello_arg = nullptr;
++  unsigned solaris_hello_fields = 0;
++  bool solaris_handshake_started = false;
++  bool solaris_hello_called = false;
++  bool solaris_hello_active = false;
++
+   // conf_max_version is the maximum acceptable version configured by
+   // `SSL_set_max_proto_version`. Note this version is not normalized in DTLS
+   // and is further constrained by `SSL_OP_NO_*`.
+--- a/ssl/ssl_lib.cc
++++ b/ssl/ssl_lib.cc
+@@ -28,6 +28,7 @@
+ #include <openssl/bytestring.h>
+ #include <openssl/crypto.h>
+ #include <openssl/err.h>
++#include <openssl/curve25519.h>
+ #include <openssl/evp.h>
+ #include <openssl/mem.h>
+ #include <openssl/nid.h>
+@@ -2192,6 +2193,44 @@
+   return 1;
+ }
+ 
++int SSL_set_solaris_client_hello_callback(
++    SSL *ssl, unsigned fields, SSL_solaris_client_hello_callback callback,
++    void *arg) {
++  auto *s = FromOpaque(ssl);
++  if (!s->config || s->server || s->config->solaris_handshake_started ||
++      fields == 0 || (fields & ~3u) != 0 || callback == nullptr ||
++      SSL_is_dtls(s) || SSL_is_quic(s)) {
++    return 0;
++  }
++  s->config->solaris_hello_fields = fields;
++  s->config->solaris_hello_callback = callback;
++  s->config->solaris_hello_arg = arg;
++  return 1;
++}
++
++int SSL_solaris_client_hello_x25519(SSL *ssl, const uint8_t peer[32],
++                                     uint8_t out[32]) {
++  if (out == nullptr) { return 0; }
++  OPENSSL_memset(out, 0, 32);
++  auto *s = FromOpaque(ssl);
++  if (peer == nullptr || !s->config || !s->config->solaris_hello_active ||
++      !s->s3->hs) {
++    return 0;
++  }
++  for (const auto &share : s->s3->hs->key_shares) {
++    if (share->GroupID() != SSL_GROUP_X25519) { continue; }
++    ScopedCBB cbb;
++    Array<uint8_t> key;
++    bool ok = CBB_init(cbb.get(), 32) && share->SerializePrivateKey(cbb.get()) &&
++              CBBFinishArray(cbb.get(), &key) && key.size() == 32 &&
++              X25519(out, key.data(), peer);
++    if (!key.empty()) { OPENSSL_cleanse(key.data(), key.size()); }
++    if (!ok) { OPENSSL_cleanse(out, 32); }
++    return ok;
++  }
++  return 0;
++}
++
+ int SSL_set1_server_supported_groups_hint(SSL *ssl,
+                                           const uint16_t *server_groups,
+                                           size_t num_server_groups) {

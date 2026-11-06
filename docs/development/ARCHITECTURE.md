@@ -119,27 +119,61 @@ services 注入 executor、timer、allocator/budget、resolver、dialer、transp
 - 统计、测速、连接关闭和追踪通过通用包装层适用于所有 adapter，业务字节与传输字节在各自边界只计一次。
 - 自动重试不得重放已交付给业务或不可重放的应用数据。
 
+### 协议家族与组合
+
+Shadowsocks 和 VLESS 分别在 `src/adapters/outbound/shadowsocks/`、`src/adapters/outbound/vless/` 内维护 descriptor、配置与协议私有实现。一个协议家族保持一个 registry 入口；加密、flow、UDP 封装属于实例配置和内部组合，不派生新的 outbound 类型，也不在通用层加入协议分支。
+
+| 家族 | 内部职责 | UDP 方案 |
+| --- | --- | --- |
+| VLESS | 基础请求/响应、VLESS encryption、`xtls-rprx-vision` 分开实现；encryption、flow、底层载体分别校验 | XUDP；由 VLESS 模块建立承载并接入共享 framing，不以 UoT 替代 |
+| Shadowsocks | 配置/密钥、AEAD TCP、原生 UDP packet codec 与 socket 生命周期分开 | 原生 UDP 或显式选择 UoT；UoT 经过 SS 的加密 stream |
+| AnyTLS | 协议握手/帧与 session 调度分开 | 通过 session 子流接入共享 UoT |
+
+裸 VLESS 指没有 VLESS encryption、没有 Vision flow 的基础协议，可使用已声明的 plain/TLS carrier。VLESS encryption 是协议自身的加密层，Vision 是 flow 行为，两者不能用普通 TLS 的实现代替；允许的组合分别声明和验证。Vision 所需的 raw 切换由中立 transport 的窄能力接口提供，禁止访问 TLS 后端私有结构。协议依据见 [Project X 的 encryption/flow 定义](https://xtls.github.io/config/outbounds/vless.html)。
+
+UoT/XUDP 的线格式 codec 与有界流式 datagram 生命周期放在共享层；adapter 负责选择封装、协议请求和承载。UoT 不能放入 AnyTLS 私有目录后供 Shadowsocks 反向引用。SS 的原生 UDP 与 UoT 共用 datagram 契约，但分别拥有对应封装、背压和错误路径；失败不静默切换方案。参考 [VLESS XUDP 配置](https://sing-box.sagernet.org/configuration/outbound/vless/)、[SS UoT 配置](https://sing-box.sagernet.org/configuration/outbound/shadowsocks/) 与 [UoT 线格式](https://sing-box.sagernet.org/configuration/shared/udp-over-tcp/)。
+
+这些是目标边界；未实现组合不发布能力、不接受后忽略配置。实际支持项见 [兼容矩阵](COMPATIBILITY.md)，M1 的逐项验收见 [开发计划](DEVELOPMENT_PLAN.md)。
+
 ## 7. 目录与对象生命周期
 
 ```text
-include/solaris/       公开 C SDK
-src/api/              SDK facade 与宿主命令入口
-src/core/             registry、快照与实例编排
-src/contracts/        内部模块接口
-src/runtime/          worker、mailbox、timer、取消、预算与退休
-src/config/           YAML、公共配置、引用图与诊断
-src/flow/             metadata、TCP relay、连接追踪
-src/flow/udp/         association、mapping、reply endpoint
-src/router/           规则解释器与索引
-src/dns/              resolver、cache、Fake-IP 与上游
-src/provider/         Provider 调度与资源快照
-src/adapters/         outbound、inbound、policy 模块
-src/transport/        通用载体与 session backend
-src/codec/            地址、framing 与协议 codec
-src/platform/         平台能力与 TUN backend
-modules/              模块与构建清单
-tests/                契约、配置、互通、故障与平台测试
+include/solaris/                    公开 C SDK
+src/api/engine/                     engine SDK facade
+src/api/common/                     错误与版本 API
+src/core/io/                        地址、通道与 outbound 通用操作
+src/core/module/                    registry、配置与实例编排
+src/contracts/{io,module,runtime,flow}/  按职责归组的内部契约
+src/runtime/engine/                 控制线程、generation 与启停屏障
+src/runtime/executor/               I/O worker、mailbox、scope 与 deadline
+src/runtime/memory/                 buffer 与预算
+src/runtime/security/               跨 worker 重放状态
+src/runtime/services/               分配、时钟与失败注入服务
+src/config/view/                    类型化配置视图与诊断
+src/config/outbound/                dialer/proxy 共用配置
+src/flow/udp/                       association、mapping、reply endpoint
+src/dns/system/                     异步系统 resolver
+src/codec/address/                  共享地址线格式
+src/adapters/outbound/{block,direct,shadowsocks,vless,anytls}/  协议家族模块
+src/transport/socket/               物理 socket、TCP/UDP 与平台策略
+src/transport/stream/               carrier 组合与 record filter
+src/transport/tls/                  TLS 通道与信任上下文
+src/transport/session/              共享 session、子流与空闲复用
+src/transport/datagram/             流式 datagram 生命周期与 UoT 组合
+src/codec/uot/                      UoT v2 独立报文编解码
+modules/                           模块与构建清单
+tests/contracts/{runtime,module,io,transport,flow,outbound}/  组件契约
+tests/support/{runtime,io,transport,flow,outbound}/           测试支持与独立对端
+tests/{sdk,consumer}/               SDK smoke 与安装消费
+scripts/verify/                    符号、模块与安装产物检查
+cmake/                             构建入口、依赖与包配置
 ```
+
+目录按可组合的职责组织，同一组件的实现、私有头文件与后端适配就近放置。新增代码先归入所属组件；出现独立职责或可复用组合时再抽子目录，避免持续向层根目录堆放文件，也不按文件扩展名单独建立 `headers/`、`sources/`。公开 SDK 保持一个稳定的 `solaris/` include 命名空间。
+
+组件之间通过契约或明确的共享服务引用，目录调整不改变依赖方向。codec 归 `src/codec/<用途>/`，socket/TLS/session 等通道后端归 `src/transport/<组件>/`，协议私有组合归 `src/adapters/<方向>/<家族>/`。测试与独立对端按对应组件归组，共用测试工具放在相应 support 目录。移动文件时同步模块清单、CMake、include、脚本路径与当前文档链接。
+
+当前 SS 已分为 `module.c`、`crypto.c`、`stream.c`、`packet.c`、`native_udp.c` 和私有头文件；VLESS 已分为 `module.c`、`stream.c` 和私有头文件；AnyTLS 的模块、session codec 与 padding 分离，通用 session 生命周期位于共享 transport 目录。后续 VLESS encryption、Vision、XUDP 接入代码归其家族目录，UoT/XUDP 的可复用 codec/stream backend 归共享层。YAML parser、router、provider、DNS cache/Fake-IP 与 platform/TUN 在对应阶段按同一规则扩展，未交付组件不创建空实现占位。
 
 配置属于 snapshot，模块实例属于 worker/runtime generation，session 属于模块实例，flow/association 持有本次选定的引用。关闭先停止新任务并排空异步完成，引用归零后才 destroy；配置提交不释放仍被旧连接使用的对象。
 

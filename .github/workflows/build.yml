@@ -40,4 +40,63 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
       - name: Verify lifecycle with sanitizer
-        run: ctest --test-dir build --output-on-failure -R "sdk_smoke|lifecycle_contract"
+        run: ctest --test-dir build --output-on-failure -R "sdk_smoke|.*_contract"
+
+  module-pruning:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - direct: "OFF"
+            block: "ON"
+          - direct: "ON"
+            block: "OFF"
+          - direct: "OFF"
+            block: "OFF"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Configure module subset
+        run: >-
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_SHARED_LIBS=OFF
+          -DSOLARIS_ENABLE_DIRECT=${{ matrix.direct }} -DSOLARIS_ENABLE_BLOCK=${{ matrix.block }}
+          -DSOLARIS_ENABLE_VLESS=OFF -DSOLARIS_ENABLE_SHADOWSOCKS=OFF -DSOLARIS_ENABLE_ANYTLS=OFF -DSOLARIS_ENABLE_SOCKS5=OFF
+          -DSOLARIS_ENABLE_PROXY_TRANSPORT=OFF -DSOLARIS_ENABLE_TLS=OFF
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Verify registry, symbols, and installed consumer
+        run: ctest --test-dir build --output-on-failure
+
+  parser-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Configure instrumented parser target
+        run: >-
+          cmake -S . -B build-fuzz -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          -DSOLARIS_BUILD_FUZZERS=ON -DSOLARIS_BUILD_EXAMPLES=OFF
+      - name: Build fuzzer and independent fixture tools
+        run: >-
+          cmake --build build-fuzz --parallel --target solaris_parser_fuzz
+          solaris_vless_encryption_tests solaris_ss_control_peer solaris_encryption_control_peer
+      - name: Generate protocol corpus
+        run: >-
+          python tests/fuzz/seeds.py build-fuzz/seeds
+          --ss-control build-fuzz/reference-tools/ss-control
+          --encryption-control build-fuzz/reference-tools/encryption-control
+          --encryption-client build-fuzz/solaris_vless_encryption_tests
+      - name: Exercise parsers with ASan and UBSan
+        run: |
+          mkdir -p build-fuzz/corpus build-fuzz/artifacts
+          build-fuzz/solaris_parser_fuzz build-fuzz/corpus build-fuzz/seeds -dict=tests/fuzz/protocols.dict -max_total_time=60 -max_len=196608 -timeout=5 -rss_limit_mb=2048 -print_final_stats=1 -artifact_prefix=build-fuzz/artifacts/ 2>&1 | tee build-fuzz/fuzz.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: parser-fuzz-evidence
+          path: |
+            build-fuzz/fuzz.log
+            build-fuzz/artifacts/

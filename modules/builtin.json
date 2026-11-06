@@ -2,13 +2,310 @@
   "modules": [
     {
       "name": "sdk",
-      "sources": ["src/api/engine.c", "src/api/error.c", "src/core/version.c"],
+      "sources": [
+        "src/api/engine/engine.c",
+        "src/api/common/error.c",
+        "src/api/common/version.c"
+      ],
       "dependencies": []
     },
     {
       "name": "runtime",
-      "sources": ["src/runtime/engine.c"],
-      "dependencies": ["libuv"]
+      "sources": [
+        "src/runtime/engine/engine.c",
+        "src/runtime/services/services.c",
+        "src/runtime/executor/executor.c",
+        "src/runtime/memory/buffer.c",
+        "src/dns/system/resolver.c",
+        "src/runtime/security/replay.c",
+        "src/runtime/metrics/traffic.c"
+      ],
+      "dependencies": [
+        "libuv"
+      ]
+    },
+    {
+      "name": "io",
+      "sources": [
+        "src/core/io/address.c",
+        "src/core/io/channel.c",
+        "src/core/io/outbound.c",
+        "src/transport/socket/socket.c",
+        "src/transport/socket/tcp.c",
+        "src/transport/socket/udp.c",
+        "src/transport/stream/carrier.c",
+        "src/codec/address/socks.c",
+        "src/codec/address/vmess.c"
+      ],
+      "dependencies": [
+        "libuv"
+      ]
+    },
+    {
+      "name": "tls",
+      "option": "SOLARIS_ENABLE_TLS",
+      "sources": [
+        "src/transport/tls/tls.c"
+      ],
+      "dependencies": [
+        "boringssl"
+      ],
+      "requires": [
+        "io",
+        "runtime"
+      ]
+    },
+    {
+      "name": "stream_filter",
+      "sources": [
+        "src/transport/stream/filter.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "io",
+        "runtime"
+      ]
+    },
+    {
+      "name": "datagram_stream",
+      "sources": [
+        "src/transport/datagram/stream.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "io",
+        "runtime"
+      ]
+    },
+    {
+      "name": "uot",
+      "sources": [
+        "src/codec/uot/codec.c",
+        "src/transport/datagram/uot.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "datagram_stream"
+      ]
+    },
+    {
+      "name": "proxy_transport",
+      "option": "SOLARIS_ENABLE_PROXY_TRANSPORT",
+      "sources": [
+        "src/config/outbound/proxy.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "registry",
+        "tls"
+      ]
+    },
+    {
+      "name": "vless",
+      "option": "SOLARIS_ENABLE_VLESS",
+      "descriptor": "solaris_vless_module",
+      "sources": [
+        "src/adapters/outbound/vless/module.c",
+        "src/adapters/outbound/vless/stream.c",
+        "src/adapters/outbound/vless/encryption/config.c",
+        "src/adapters/outbound/vless/encryption/crypto.c",
+        "src/adapters/outbound/vless/encryption/client.c",
+        "src/adapters/outbound/vless/vision/codec.c",
+        "src/adapters/outbound/vless/vision/tls.c",
+        "src/adapters/outbound/vless/datagram.c"
+      ],
+      "dependencies": [
+        "boringssl",
+        "blake3"
+      ],
+      "requires": [
+        "registry",
+        "stream_filter",
+        "proxy_transport",
+        "xudp"
+      ]
+    },
+    {
+      "name": "shadowsocks",
+      "option": "SOLARIS_ENABLE_SHADOWSOCKS",
+      "descriptor": "solaris_shadowsocks_module",
+      "sources": [
+        "src/adapters/outbound/shadowsocks/module.c",
+        "src/adapters/outbound/shadowsocks/crypto.c",
+        "src/adapters/outbound/shadowsocks/stream.c",
+        "src/adapters/outbound/shadowsocks/native_udp.c",
+        "src/adapters/outbound/shadowsocks/packet.c"
+      ],
+      "dependencies": [
+        "boringssl",
+        "blake3"
+      ],
+      "requires": [
+        "registry",
+        "stream_filter",
+        "proxy_transport",
+        "uot"
+      ]
+    },
+    {
+      "name": "udp_association",
+      "sources": [
+        "src/flow/udp/association.c"
+      ],
+      "dependencies": [
+        "libuv"
+      ],
+      "requires": [
+        "runtime",
+        "io"
+      ]
+    },
+    {
+      "name": "registry",
+      "sources": [
+        "src/core/module/registry.c",
+        "src/config/view/view.c",
+        "src/config/outbound/dialer.c"
+      ],
+      "dependencies": []
+    },
+    {
+      "name": "direct",
+      "option": "SOLARIS_ENABLE_DIRECT",
+      "descriptor": "solaris_direct_module",
+      "requires": [
+        "registry",
+        "io",
+        "runtime"
+      ],
+      "sources": [
+        "src/adapters/outbound/direct/module.c"
+      ],
+      "dependencies": []
+    },
+    {
+      "name": "block",
+      "option": "SOLARIS_ENABLE_BLOCK",
+      "descriptor": "solaris_block_module",
+      "requires": [
+        "registry",
+        "io",
+        "runtime"
+      ],
+      "sources": [
+        "src/adapters/outbound/block/module.c"
+      ],
+      "dependencies": []
+    },
+    {
+      "name": "session",
+      "sources": [
+        "src/transport/session/pool.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "io",
+        "runtime"
+      ]
+    },
+    {
+      "name": "anytls",
+      "option": "SOLARIS_ENABLE_ANYTLS",
+      "descriptor": "solaris_anytls_module",
+      "sources": [
+        "src/adapters/outbound/anytls/module.c",
+        "src/adapters/outbound/anytls/session.c",
+        "src/adapters/outbound/anytls/padding.c"
+      ],
+      "dependencies": [
+        "boringssl"
+      ],
+      "requires": [
+        "registry",
+        "proxy_transport",
+        "session",
+        "uot"
+      ]
+    },
+    {
+      "name": "xudp",
+      "sources": [
+        "src/codec/xudp/codec.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "datagram_stream"
+      ]
+    },
+    {
+      "name": "flow_plan",
+      "sources": [
+        "src/flow/plan/plan.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "io",
+        "runtime"
+      ]
+    },
+    {
+      "name": "select_policy",
+      "sources": [
+        "src/policy/select/control.c",
+        "src/policy/select/group.c"
+      ],
+      "dependencies": [
+        "libuv"
+      ],
+      "requires": [
+        "registry",
+        "flow_plan"
+      ]
+    },
+    {
+      "name": "connection_observation",
+      "sources": [
+        "src/observe/connections/tracker.c",
+        "src/observe/connections/stream.c",
+        "src/observe/connections/datagram.c"
+      ],
+      "dependencies": [
+        "libuv"
+      ],
+      "requires": [
+        "flow_plan",
+        "io",
+        "runtime"
+      ]
+    },
+    {
+      "name": "http_probe",
+      "sources": [
+        "src/observe/probe/http.c",
+        "src/observe/probe/http_codec.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "connection_observation",
+        "select_policy"
+      ]
+    },
+    {
+      "name": "socks5",
+      "option": "SOLARIS_ENABLE_SOCKS5",
+      "descriptor": "solaris_socks5_module",
+      "sources": [
+        "src/adapters/outbound/socks5/module.c",
+        "src/adapters/outbound/socks5/codec.c",
+        "src/adapters/outbound/socks5/stream.c",
+        "src/adapters/outbound/socks5/udp.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "registry",
+        "io",
+        "runtime"
+      ]
     }
   ],
   "public_headers": [
