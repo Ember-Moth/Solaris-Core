@@ -107,17 +107,17 @@ M1-06 必须分别取得以下证据，完成状态由 [开发计划](DEVELOPMEN
 
 ## 9. Parser fuzz 复现
 
-使用带 libFuzzer runtime 的原生 Clang/Clang++；该开关构建独立插桩 core，不改变正常 SDK 的编译参数。
+使用带 libFuzzer runtime 的原生 Clang/Clang++。fuzzer 使用独立 core；下列专用构建还为 BoringSSL C++ 后端开启 coverage/ASan/UBSan，以覆盖私有 session 字段解析。普通 SDK 构建不采用这些参数。
 
 ```sh
-cmake -S . -B build-fuzz -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSOLARIS_BUILD_FUZZERS=ON -DSOLARIS_BUILD_EXAMPLES=OFF
-cmake --build build-fuzz --parallel --target solaris_parser_fuzz solaris_vless_encryption_tests solaris_ss_control_peer solaris_encryption_control_peer
-python3 tests/fuzz/seeds.py build-fuzz/seeds --ss-control build-fuzz/reference-tools/ss-control --encryption-control build-fuzz/reference-tools/encryption-control --encryption-client build-fuzz/solaris_vless_encryption_tests
+cmake -S . -B build-fuzz -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSOLARIS_BUILD_FUZZERS=ON -DSOLARIS_BUILD_EXAMPLES=OFF -DSOLARIS_SANITIZER=address "-DCMAKE_CXX_FLAGS=-fsanitize=fuzzer-no-link,address,undefined"
+cmake --build build-fuzz --parallel --target solaris_parser_fuzz solaris_vless_encryption_tests solaris_ss_control_peer solaris_encryption_control_peer solaris_tls_profiles_tests solaris_tls_profiles_peer
+python3 tests/fuzz/seeds.py build-fuzz/seeds --ss-control build-fuzz/reference-tools/ss-control --encryption-control build-fuzz/reference-tools/encryption-control --encryption-client build-fuzz/solaris_vless_encryption_tests --tls-client build-fuzz/solaris_tls_profiles_tests --tls-peer build-fuzz/reference-tools/tls-profiles-peer
 mkdir -p build-fuzz/corpus build-fuzz/artifacts
 build-fuzz/solaris_parser_fuzz build-fuzz/corpus build-fuzz/seeds -dict=tests/fuzz/protocols.dict -max_total_time=60 -max_len=196608 -timeout=5 -rss_limit_mb=2048 -print_final_stats=1 -artifact_prefix=build-fuzz/artifacts/
 ```
 
-入口覆盖地址、UoT/XUDP、VLESS/Vision、SS TCP/UDP、SOCKS5 握手/UDP、AnyTLS padding/session、VLESS encryption 配置/记录/握手、HTTP URL/响应和模块配置。输入包含 parser/variant/分配失败索引，逐次核对预算归零；没有网络或 executor 活动。保留失败 artifact 和命令，修复后以原 artifact 回放，再恢复变异运行。机制见 [LLVM libFuzzer 文档](https://llvm.org/docs/LibFuzzer.html)。有限时长运行不代表所有输入或平台已被穷尽。
+入口覆盖地址、UoT/XUDP、VLESS/Vision、SS TCP/UDP、SOCKS5 握手/UDP、AnyTLS padding/session、VLESS encryption 配置/记录/握手、HTTP URL/响应、模块配置和 TLS session 序列化。输入包含 parser/variant/分配失败索引，逐次核对预算归零；没有网络或 executor 活动。保留失败 artifact 和命令，修复后以原 artifact 回放，再恢复变异运行。机制见 [LLVM libFuzzer 文档](https://llvm.org/docs/LibFuzzer.html)。有限时长运行不代表所有输入或平台已被穷尽。
 
 
 TLS 基线和补丁有独立的 `tls_patch_contract`、`tls_recipe_contract`，范围见 [TLS 后端](TLS_BACKEND.md)。

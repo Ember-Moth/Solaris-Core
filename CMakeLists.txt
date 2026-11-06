@@ -185,6 +185,58 @@ if(SOLARIS_BUILD_TESTS AND BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
         add_test(NAME tls_patch_contract COMMAND "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/tests/support/transport/tls_patch.py" "$<TARGET_FILE:solaris_tls_patch_tests>")
         set_tests_properties(tls_patch_contract PROPERTIES TIMEOUT 30)
+        add_executable(solaris_tls_record_patch_tests tests/contracts/transport/tls_record_patch.c)
+        solaris_configure_target(solaris_tls_record_patch_tests)
+        target_include_directories(solaris_tls_record_patch_tests PRIVATE tests)
+        target_link_libraries(solaris_tls_record_patch_tests PRIVATE ssl crypto)
+        add_test(NAME tls_record_patch_contract COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/support/transport/tls_patch.py" "$<TARGET_FILE:solaris_tls_record_patch_tests>")
+        set_tests_properties(tls_record_patch_contract PROPERTIES TIMEOUT 30)
+        add_executable(solaris_tls_key_patch_tests tests/contracts/transport/tls_key_patch.c)
+        solaris_configure_target(solaris_tls_key_patch_tests)
+        target_include_directories(solaris_tls_key_patch_tests PRIVATE tests)
+        target_link_libraries(solaris_tls_key_patch_tests PRIVATE ssl crypto)
+        add_test(NAME tls_key_patch_contract COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/support/transport/tls_patch.py" "$<TARGET_FILE:solaris_tls_key_patch_tests>")
+        set_tests_properties(tls_key_patch_contract PROPERTIES TIMEOUT 30)
+        add_executable(solaris_tls_resumption_patch_tests tests/contracts/transport/tls_resumption_patch.c)
+        solaris_configure_target(solaris_tls_resumption_patch_tests)
+        target_include_directories(solaris_tls_resumption_patch_tests PRIVATE tests)
+        target_link_libraries(solaris_tls_resumption_patch_tests PRIVATE ssl crypto)
+        add_test(NAME tls_resumption_patch_contract COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/support/transport/tls_patch.py" "$<TARGET_FILE:solaris_tls_resumption_patch_tests>")
+        set_tests_properties(tls_resumption_patch_contract PROPERTIES TIMEOUT 30)
+        add_executable(solaris_tls_policy_patch_tests tests/contracts/transport/tls_policy_patch.c)
+        solaris_configure_target(solaris_tls_policy_patch_tests)
+        target_link_libraries(solaris_tls_policy_patch_tests PRIVATE ssl crypto)
+        add_test(NAME tls_policy_patch_contract COMMAND solaris_tls_policy_patch_tests)
+        set_tests_properties(tls_policy_patch_contract PROPERTIES TIMEOUT 30)
+        # The protocol algorithms here are test consumers of the private TLS
+        # seams. They do not add unimplemented outbound/configuration entries.
+        add_library(solaris_tls_fixture_blake3 STATIC
+            third_party/blake3/blake3.c third_party/blake3/blake3_dispatch.c third_party/blake3/blake3_portable.c)
+        set_target_properties(solaris_tls_fixture_blake3 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        target_include_directories(solaris_tls_fixture_blake3 PUBLIC third_party/blake3)
+        target_compile_definitions(solaris_tls_fixture_blake3 PRIVATE
+            BLAKE3_NO_SSE2 BLAKE3_NO_SSE41 BLAKE3_NO_AVX2 BLAKE3_NO_AVX512 BLAKE3_USE_NEON=0)
+        add_executable(solaris_tls_profiles_tests tests/contracts/transport/tls_profiles.c
+            tests/support/transport/tls_profiles/profile.c tests/support/transport/tls_profiles/records.c)
+        solaris_configure_target(solaris_tls_profiles_tests)
+        target_include_directories(solaris_tls_profiles_tests PRIVATE tests)
+        target_link_libraries(solaris_tls_profiles_tests PRIVATE ssl crypto uv_a solaris_tls_fixture_blake3)
+        find_program(GO_EXECUTABLE go REQUIRED)
+        set(solaris_tls_profiles_peer "${PROJECT_BINARY_DIR}/reference-tools/tls-profiles-peer${CMAKE_EXECUTABLE_SUFFIX}")
+        add_custom_command(OUTPUT "${solaris_tls_profiles_peer}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROJECT_BINARY_DIR}/reference-tools"
+            COMMAND "${GO_EXECUTABLE}" build -mod=readonly -trimpath -o "${solaris_tls_profiles_peer}" .
+            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests/support/transport/tls_profiles_peer"
+            DEPENDS tests/support/transport/tls_profiles_peer/go.mod tests/support/transport/tls_profiles_peer/go.sum
+                tests/support/transport/tls_profiles_peer/main.go VERBATIM)
+        add_custom_target(solaris_tls_profiles_peer ALL DEPENDS "${solaris_tls_profiles_peer}")
+        add_test(NAME tls_profiles_interop_contract COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/support/transport/tls_profiles.py" "$<TARGET_FILE:solaris_tls_profiles_tests>"
+            --peer "${solaris_tls_profiles_peer}")
+        set_tests_properties(tls_profiles_interop_contract PROPERTIES TIMEOUT 180)
         add_test(NAME tls_recipe_contract COMMAND "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/tests/contracts/transport/tls_recipe.py")
         set_tests_properties(tls_recipe_contract PROPERTIES TIMEOUT 30)

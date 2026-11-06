@@ -1,143 +1,147 @@
 # TLS 后端与补丁边界
 
+更新日期：2026-11-06。本文描述已实现的私有 TLS 库能力及其调用约束；生产出站/配置接入仍由对应协议模块完成。
+
 ## 固定基线与构建
 
-TLS/crypto 统一使用 BoringSSL 周期快照 **0.20261020.0**，对应提交
+统一使用 BoringSSL 周期快照 **0.20261020.0**，提交
 `d3bf4795ad5b79d646cddf2fec687da5b9b502db`。`dependencies/lock.json`
-同时锁定版本、提交、归档 SHA-256、原始源码树 SHA-256，以及按顺序应用的补丁及其哈希。
-上游快照没有稳定 ABI 或 LTS 承诺；更新必须重新完成本文件的验收，不跟随分支 HEAD。
+锁定版本、提交、归档和原始源码树 SHA-256、补丁顺序与各补丁哈希，当前 patch ABI 为 5。
+上游快照没有稳定 ABI 或 LTS 承诺；更新后要重新完成下述验证。
 
-构建先由 FetchContent 下载并核验归档，再由 `scripts/dependencies/boringssl.py`
-验证完整原始树、复制到当前构建目录的 `_deps/solaris_bssl-patched`，逐个执行严格的
-`git apply --check` 和 `git apply`。原始源码不修改；每次配置还会核验生成树，拒绝手工改动、
-旧版本 source override、错误补丁哈希和不可应用补丁。补丁集变化从原始树重新生成，
-不会在已修改的树上反复打补丁。交叉编译使用宿主 Python 3.9+ 和 Git。
+FetchContent 校验归档，`scripts/dependencies/boringssl.py` 再验证原始树，复制到当前构建目录的
+`_deps/solaris_bssl-patched`，执行严格的 `git apply --check` 和 `git apply`。
+每次配置校验生成树，拒绝源码/补丁/结果树篡改；补丁变更从干净基线重新生成。
+`FETCHCONTENT_SOURCE_DIR_SOLARIS_BSSL` 只能指向同一版本的原始树。
+宿主需要 Python 3.9+ 和 Git，交叉编译也在宿主完成这些步骤。
 
-可用 `FETCHCONTENT_SOURCE_DIR_SOLARIS_BSSL` 复用**同一锁定版本的原始树**，不能指向已打补丁的源码。
-修改锁文件和补丁会触发 CMake 重新配置。BoringSSL 静态链接、使用 `solaris_bssl` 私有符号前缀，
-不安装它的头文件，不在 Solaris 公共 SDK 暴露 `SSL *`。新增导出必须进入 BoringSSL 的两种
-prefix table 并通过归档符号审计。旧的单体 `boringssl-reality.patch` 已由新设计替代。
+BoringSSL 静态链接并使用 `solaris_bssl` 符号前缀，不安装其头文件，也不在 Solaris 公共 SDK 暴露 `SSL *`。
+新增接口在两套 prefix table 中登记，归档符号和安装消费测试继续检查隔离。
 
-## 分层与状态
+## 已实现的补丁
 
-协议认证在各自适配层；BoringSSL 补丁只提供无法用公开 API 安全表达的握手/记录能力。
-Solaris TLS backend 继续拥有 SSL/BIO、有限输入队列、deadline、背压、取消和关闭屏障。
-同一个连接只能选择一个认证 profile；Vision 是上层流处理，可以与经过验收的承载组合。
-不得通过 BIO 输出后的任意字节修改来改变 Hello，也不得把认证失败转换为代理连接成功。
-
-| 能力 | 补丁/接口决策 | 当前实现范围 |
+| 顺序 | 文件 | 能力 |
 | --- | --- | --- |
-| ClientHello 固定字段认证 | `0001-client-hello-auth.patch` | 已实现，TLS 1.3 ClientHello random/session ID 和受限 X25519 派生 |
-| Restls 首条加密记录试探与 Finished 交接 | 下文的记录事务接口设计 | 待随 Restls adapter 和独立对端一起实现；没有旁路开关 |
-| JLS ServerHello 认证与证书签名替代 | 下文的认证状态接口设计 | 待随 JLS adapter 和独立对端一起实现；没有跳过 CertificateVerify 的通用开关 |
-| REALITY/ShadowTLS/Restls/JLS 完整协议 | 独立 profile、认证、记录封装和配置工厂 | 尚未接入；底层 hook 的通过不等于这些协议已支持 |
-| Vision raw | 已有 stream 的分方向 raw 接口 | 使用公开 TLS API 和有限单记录 feeder；不需要新增 BoringSSL patch |
+| 1 | `0001-client-hello-auth.patch` | ClientHello random/session ID 定长认证回调；内部状态、wire、transcript 和 PSK binder 同步 |
+| 2 | `0002-record-auth-and-finished.patch` | 首条受保护记录的 AEAD 事务试探、原记录回退、精确 Client Finished 密文记录捕获 |
+| 3 | `0003-peer-auth-and-session-binding.patch` | ServerHello 认证后的证书认证替代；绑定身份、SNI 和配置代际的可序列化恢复票据 |
+| 4 | `0004-eager-and-hybrid-key-shares.patch` | TLS 1.2 提前生成并复用 X25519/P-256/P-384；TLS 1.3 hybrid 中的 X25519 派生 |
+| 5 | `0005-disable-client-resumption.patch` | 按连接禁止 TLS 1.2/1.3 恢复、ticket/PSK 广告和缓存回调 |
 
-完整协议仍按开发计划的安全/传输扩展任务验收。本次固定基线和补丁设计不改变 M1 的协议范围，
-也不提前暴露尚无互通证据的配置字段。
+所有设置只作用于单个 SSL，必须在第一次握手前完成；普通 TLS 不启用这些扩展。
+回调同步执行，输入和借用输出仅在约定期间有效，不得重入握手/I/O 或释放 SSL。
+调用方持有 callback context 至 SSL 释放。认证状态属于当前连接，不在 SSL_CTX 或不同连接间继承。
+带 ClientHello 认证回调的连接重建使用新的 SSL；`SSL_clear` 会清除认证结果，旧 Hello 回调不能在同一对象重跑。
 
-## ClientHello 认证接口
+密码、认证消息和数据封装留在协议层。补丁没有新增 registry 类型、YAML 字段或占位成功路径。
+本次测试中的协议客户端位于 `tests/support/transport/tls_profiles/`，不进入发布库。
+Vision 继续使用已实现的分方向 raw 接口，不需要额外修改 BoringSSL。
 
-`SSL_set_solaris_client_hello_callback` 只能在第一次握手前配置到单个 SSL，不能继承为进程全局策略。
-调用方声明可替换 `random`、`session_id` 或二者；输出是两个定长 32 字节数组，没有任意扩展写指针。
-回调同步执行，不允许重入 SSL，输入和输出指针只在回调内有效，context 由 backend 持有至 SSL 释放。
+## ClientHello 与 key share
 
-调用顺序：
+`SSL_set_solaris_client_hello_callback` 接收完整 ClientHello（含四字节握手头），仅允许替换声明的
+32 字节 random/session ID。库更新内部 `client_random`/`session_id` 后再进入 transcript。
+有 PSK 时，回调输入的 binders 先清零但保留长度前缀，提交字段后使用上游 binder 算法重新计算。
+失败不发送 ClientHello；未知 flags、空回调、握手中重配置均拒绝。
 
-1. BoringSSL 生成 random、session ID、key shares、扩展及完整四字节头的 ClientHello。
-2. 如有 PSK，清零 binder 内容但保留原有长度前缀，将这份完整消息交给认证回调。
-3. 回调计算协议字段；库只提交声明的字段，并同步 `client_random` 和内部 `session_id`。
-4. 用上游 `tls13_psk_binder` 对最终 ClientHello 重新计算 binder，然后进入原有发送和 transcript 路径。
+TLS 1.3 要求固定 min/max 为 1.3；TLS 1.2 必须同时启用 eager key share 且固定版本为 1.2。
+ECH、DTLS、QUIC、early data、重协商和 HelloRetryRequest 不与 Hello 认证组合。
 
-回调返回失败则不发送 ClientHello。未知 field、空回调、server 角色和握手中重配置会被拒绝。
-启用此扩展时必须把最低/最高版本都设为 TLS 1.3；ECH、DTLS、QUIC、early data、重协商和
-HelloRetryRequest 均明确失败。普通 TLS 没有这些额外限制。恢复模式可重新计算 binder，
-但上层仍须对 ticket 的协议、身份、服务端和配置 generation 做隔离。
+- `SSL_solaris_client_hello_x25519` 使用独立 X25519 share，保持原接口语义。
+- `SSL_solaris_client_hello_x25519_for_group` 显式选择独立 X25519 或 X25519MLKEM768 的 X25519 部分。
+  派生在拥有私钥的 key-share 对象内完成，不导出或消耗私钥；低阶点、缺失 share 和回调外调用失败并清零输出。
+- `SSL_set1_solaris_eager_key_shares` 配置最多三个不重复的 X25519/P-256/P-384，在 TLS 1.2 Hello 前生成。
+  `SSL_get0_solaris_eager_key_share` 仅在 Hello 回调内借用编码后的公钥。
+  ClientKeyExchange 使用选中组的同一密钥；未准备的组、静态 RSA/PSK 套件拒绝，不能重新生成另一把密钥。
+  仅 session ID 的 TLS 1.2 恢复被丢弃并重新完整握手；ticket 恢复仍可用。
 
-`SSL_solaris_client_hello_x25519` 仅在回调内可用，使用实际发出的独立 X25519 key share
-与指定服务端公钥计算 shared secret。它拒绝不存在的 share、低阶公钥和回调外访问，
-失败时清零输出；临时私钥在库内清理，调用方必须清理派生出的密钥。当前不从 hybrid share
-拆取私钥，也不把任意 TLS 私钥导出给适配层。REALITY profile 需显式配置独立 X25519 share；
-增加 hybrid/fingerprint 支持时要作为独立组合验证。
+## 记录认证与 Finished
 
-## 四种协议的接入设计
+`SSL_set_solaris_record_auth_callback` 只处理第一条完整受保护的服务端记录。
+支持 TLS 1.2/1.3 的 AES-128-GCM、AES-256-GCM、ChaCha20-Poly1305；CBC 不进入试探。
 
-### REALITY
+1. 保留原始 header、密文、cipher 和 sequence，给回调一份有界密文 body 副本。
+2. 回调只能改副本，不能改变 header、长度或序号，也不能直接提交明文或宣称 AEAD 成功。
+3. 使用当前 AEAD 验证候选。成功才把明文放回库自己的输入缓冲，并按原路径推进一次序号。
+4. 候选失败清理临时明文和本次试探的错误。默认终止；显式 `SSL_SOLARIS_RECORD_ALLOW_FALLBACK`
+   才会验证未修改的原记录，回退成功仍是未认证状态。
 
-profile 用回调内的 X25519 结果、ClientHello random 前 20 字节和 `REALITY` info 派生认证密钥。
-构造包含版本、保留位、时间及 short ID 的 16 字节明文，将 ClientHello 的 session ID 清零作为 AAD，
-以 random 后 12 字节作为 nonce 生成 32 字节认证 session ID。协议版本和时间由 profile 提供，
-不能把旧补丁中的固定版本字节留在 TLS 库中。
+`SSL_get_solaris_record_auth_result` 在回调中和握手未完成时返回 PENDING；候选失败返回 REJECTED；
+仅在候选验证和完整 TLS 握手均成功后返回 OK。证书链、身份、CertificateVerify 和 Finished 校验仍保留。
 
-临时证书认证通过 BoringSSL 已有 custom verify API 实现：验证证书结构、Ed25519 公钥的认证值，
-以及配置要求的附加签名；保留 TLS CertificateVerify 和 Finished 校验。
-正常证书验证成功只表示连到了伪装站点，不能表示 REALITY 认证成功。未认证不得转发代理负载；
-如实现伪装站点回退，必须有独立状态、限额及关闭路径。首个接入禁用 ticket/0-RTT；恢复、ML-DSA
-和不同 key-share/fingerprint 组合各自增加验收，不能由普通 TLS 或 Vision 测试推导。
+`SSL_enable_solaris_client_finished_capture` 把 Client Finished 隔离成自己的完整 TLS 记录，保存准确密文，
+总量上限 4096 字节；BIO 分片或 WANT_WRITE 重试不会重复捕获。
+`SSL_get0_solaris_client_finished` 在完整握手成功且 flight 已提交到 BIO 后提供借用视图。
+使用内存 BIO 时，调用方还必须等真实 carrier write 完成，才能发送协议后续数据或进行 raw 切换。
+Solaris 现有 TLS/stream 屏障在后续协议接线中仍须保持。
 
-### ShadowTLS v3
+## ServerHello 认证与恢复隔离
 
-profile 保留 28 字节随机 session ID，最后 4 字节暂时清零，计算完整 ClientHello 的 HMAC 后填入。
-session ID 必须在 transcript 前同步。ServerHello/random 的读取可以用已有消息回调；
-ShadowTLS 的 HMAC/XOR 记录封装位于 TLS 下方的有界 record wrapper，恢复给 TLS 的记录必须先通过
-协议认证。完成真正的 TLS 握手后，按原有 raw 屏障交接，保留在途写、预读记录和未消费明文的顺序。
+`SSL_set_solaris_peer_auth_callback` 用于 JLS 一类替代证书认证的 TLS 1.3 profile，必须同时配置 RANDOM Hello 回调。
+它接收已完成结构解析的原始 ServerHello；回调必须对本次消息做密码认证。
+只有返回成功的当前握手才能采用替代链认证和 CertificateVerify 签名验证路径。
+签名消息的结构、非空签名、允许的算法及公钥类型检查保留，transcript 和 Finished 验证始终保留。
+认证失败直接终止，不以普通证书成功作为协议成功。
 
-严格模式要求 TLS 1.3。伪装服务器的 TLS 证书验证与 ShadowTLS 服务端认证分别记录；认证不成立时
-禁止打开代理通道。v1/v2、非严格 TLS 1.2 和用户数据记录 HMAC 不是 ClientHello hook 自带的功能。
+`SSL_get_solaris_peer_auth_result` 仅在认证和完整握手完成后返回 OK。
+替代认证下 `SSL_get_verify_result` 保留 `X509_V_ERR_APPLICATION_VERIFICATION`，不伪装为 PKIX 验证通过。
+record auth 与 peer auth 互斥；peer auth 不与 eager TLS 1.2、ECH、DTLS、QUIC、early data、PAKE 或重协商组合。
 
-### Restls
+设置时传入 32 字节 `identity_context`，代表协议、用户、逻辑服务端和配置 generation，不放入密码材料。
+库还自动绑定本次 SNI。收到 ticket 后，用该 ticket 的 PSK 为上下文生成标记，保存为私有 ASN.1 `[100]` 字段。
+序列化和 session 复制保留标记，握手配置释放后仍能正确签发标记；字段长度、版本、客户端角色和 QUIC 标记严格校验。
 
-TLS 1.3 session ID 认证以 key-share 的 group/data 及 PSK identities 为输入，可由同一 Hello 回调完成。
-Restls 的 keyed BLAKE3、记录脚本、方向计数、长度掩码及 HMAC 均在 adapter；不塞进 BoringSSL。
-参考实现还依赖以下两个能力，需要作为第二个补丁单独实现和验收：
+普通 TLS ticket 不升级为替代认证 ticket，替代认证 ticket 不进入普通 TLS 恢复。
+身份/generation/SNI 不一致或标记改变时不发送 PSK，仍以已选 profile 完成新的完整认证握手。
+恢复时也重新认证 ServerHello。session 对象的可信存储由调用方负责。
 
-- **首条受保护记录的事务试探**：在 read cipher 已安装、序号尚未推进时，提供有界密文副本给 profile
-  做 XOR 还原。候选记录必须经过原有 AEAD 验证。仅候选成功才能推进序号和标记认证；候选失败要丢弃
-  试探明文及其错误栈，不污染原始密文或 cipher 状态。若继续验证原始 TLS 记录，只能进入未认证回退状态。
-  接口不得允许 callback 直接声称解密成功或提供未经 AEAD 验证的明文。首版限 TLS 1.3 AEAD；CBC/SSLv3 不适用。
-- **Client Finished 的精确 wire 交接**：在握手消息封装为记录时标记覆盖 Finished 的所有输出记录，
-  将有界副本交给 profile，并在实际 carrier 写完成后确认屏障。不能假定一次 BIO write 恰好是一条 Finished，
-  不能把明文 Finished 当成协议所需的密文记录，也不能重发已经提交的记录。
+## 禁用恢复
 
-完成认证和 Finished 写屏障后，Restls 自己接管应用记录；普通 TLS NewSessionTicket、alert 与伪装站点
-数据的分流仍需按协议处理。TLS 1.2 不是修改 min-version 就能支持：它还要求提前生成并保留客户端 ECDHE
-key，按 group/public key 和 ticket 构造认证 session ID，并处理显式 GCM nonce 与恢复握手顺序。
-这部分要设计独立 eager-key 接口并与 TLS 1.2 对端验证，不能复用只有 TLS 1.3 证据的 hook 宣称可用。
+`SSL_disable_solaris_resumption` 丢弃提供的 session，不发送 TLS 1.2 session-ticket、TLS 1.3
+pre_shared_key/psk_key_exchange_modes 扩展，不向调用方交付可缓存的新 ticket/session。
+收到的 TLS 1.3 ticket 仍按正常消息语法处理，但不触发缓存回调；配置释放后策略仍有效。
+外部 PSK、PAKE、early data、DTLS、QUIC 和重协商组合明确拒绝。
+普通连接及其他 SSL 对象的恢复行为不受影响。
 
-### JLS v3
+这是 REALITY/ShadowTLS profile 的必要设置。上游 `SSL_OP_NO_TICKET` 只控制 RFC 5077，不能代替 TLS 1.3 策略。
+对完整 Hello 认证的协议不能在回调后再引入会改变认证输入的 PSK binder。
 
-profile 将 ClientHello random 和 PSK binders 清零后构造认证输入，按 username/password 派生的
-key/nonce 生成 FakeRandom；禁止产生协议保留的 downgrade/HRR 后缀。第一层补丁保证最终 binder
-与替换后的 random 一致。ServerHello 认证使用原始消息且只清零 random，禁止 HRR。
+## 协议映射与验证范围
 
-JLS 的伪装证书机制还需要第三个补丁：在 ServerHello 解析完成、转入证书处理之前执行同步认证回调，
-建立只属于本次握手的 `unauthenticated → authenticated` 状态。只有认证成功的 JLS profile 才能采用
-其证书链/CertificateVerify 替代规则；消息结构、signature 字段边界、transcript 和 Finished 验证仍保留。
-失败不降级成“忽略证书错误”，也不能在 SSL_CTX、复用 SSL 或其他连接间继承认证状态。
-该状态由完整协议认证产生，不提供随意设置 `authenticated=true` 或全局 `skip_verify` 的公开 API。
+| 协议 | 使用的能力与约束 | 已验证的 TLS 层范围 |
+| --- | --- | --- |
+| REALITY | Hello SID、显式组 ECDH、已有 custom certificate verify、禁用恢复；显式允许 Ed25519，保留真实 CertificateVerify | 当前 Xray 引用的 REALITY 服务端；hybrid-only 与 hybrid+X25519；错误 key/short ID/时间和签名算法拒绝 |
+| ShadowTLS v3 | Hello SID HMAC、禁用恢复；TLS 下方的 HMAC/XOR wrapper 和握手后的独立数据 HMAC | 严格 TLS 1.3、真实证书/身份校验、双向数据、错误密码和身份拒绝 |
+| Restls | Hello SID、record probe、Finished；TLS 1.2 使用 eager public keys | TLS 1.3 完整/恢复，TLS 1.2 X25519/P-256/P-384 完整/恢复，双向数据；错误密码/身份、未认证回退拒绝转发 |
+| JLS v3 | Hello random、peer auth、PSK binder 和身份标记 | 完整/恢复/序列化/复制/配置释放；不同用户/SNI/generation 隔离，错误凭据、SH、空签名、未知算法和错误 Finished 拒绝 |
 
-ticket 必须绑定 JLS 身份、服务端、协议版本及配置 generation，并在接收时记录已认证来源；
-普通 TLS ticket、其他用户 ticket、过期或旧配置 ticket 都不能提升为 JLS 会话。
-导出/恢复时也必须保留这个约束，无法证明绑定则丢弃恢复。首个 adapter 可以拒绝恢复模式；
-启用恢复必须另测 binder、两端身份认证和 ticket 隔离。
+Restls 的 XOR 只修改指定位置起的前 16 字节；TLS 1.2 GCM 的显式 nonce 处理由 profile 决定。
+Client Finished 参与首个应用记录认证的情形是 TLS 1.3 和 TLS 1.2 恢复；TLS 1.2 完整握手不加入该项。
+当前 REALITY 引用要求先提供 X25519MLKEM768，可再提供 X25519；测试 profile 明确选择服务端使用的认证 share。
 
-## 验收与升级
+以上证明补丁可以承载相应握手和数据交接。生产协议 outbounds、YAML 配置、浏览器指纹、REALITY 附加 ML-DSA 策略、
+ShadowTLS 非严格/旧版本等功能仍按对应适配任务单独交付，不从这些 TLS 测试推导。
 
-已经存在的底座测试：`tls_recipe_contract` 检验干净应用、重复配置、原始树/补丁/结果树篡改、
-版本切换重建和应用失败保护；`tls_patch_contract` 检验真实 TLS transcript、TLS 1.3 ticket 恢复与
-零 binder 输入、实际 key-share 一致性、低阶公钥、拒绝回调、错误证书/hostname、HRR、版本和时序限制。
-后者使用内存 BIO 的 BoringSSL 两端，不把它作为四种协议的独立互通证据。
+## 验证入口
 
-每次升级版本或修改补丁还必须运行：普通 TLS 1.2/1.3 独立对端、Vision raw/缓冲交接、现有协议全套、
-私有符号与安装消费、ASan/UBSan/TSan、静态裁剪。新增协议再增加固定版本的独立服务端及同对端控制，
-覆盖错误密码/short ID、时钟边界、篡改、重放、分片/粘包、PSK/HRR/ECH 拒绝、取消与真实写完成屏障。
-Restls 记录试探必须证明失败不改变序号或消耗原记录；JLS 必须证明未认证、旧 ticket 和错误身份不能触发签名替代。
-未通过这些门槛的补丁不进入默认 series，未验证的协议不进入支持矩阵。
+- `tls_patch_contract`：Hello/transcript、PSK binder、身份/版本/HRR 与 callback 生命周期。
+- `tls_record_patch_contract`：三种 AEAD 的 TLS 1.2/1.3 候选成功、原记录回滚、篡改/回调失败、CBC 拒绝；7 字节 BIO 写、3 字节输入和精确 Finished。
+- `tls_key_patch_contract`：提前生成的公钥与实际 ClientKeyExchange 一致、TLS 1.2 ticket 与 session-ID 行为、缺失组及 hybrid 派生。
+- `tls_resumption_patch_contract`：线上的扩展、输入 session 丢弃、缓存抑制、普通连接不受影响与 early-data 拒绝。
+- `tls_policy_patch_contract`：参数/输出归零、DTLS/QUIC/ECH、认证模式冲突和外部 PSK 拒绝，失败前不输出 Hello。
+- `tls_profiles_interop_contract`：固定独立 Go 服务端的 53 个场景；包括由真实流量密钥重新生成合法 AEAD 标签的错误 Finished/签名算法。
+- `tls_recipe_contract`、`crypto_symbols`、`installed_consumer`：补丁完整性、隔离和 SDK 消费。
+- parser fuzz 的 session 入口使用独立握手生成的 ticket，检查扩展后的 session 解析和序列化往返；运行方式见 [测试规范](TESTING.md)。
+
+升级或修改补丁还需运行普通 TLS、Vision raw、现有协议、共享/静态安装消费、ASan/UBSan、TSan 和裁剪检查。
+实际结果见 [开发计划](DEVELOPMENT_PLAN.md)。
 
 固定参考：
 
-- [BoringSSL 上游集成约定](https://github.com/google/boringssl/blob/d3bf4795ad5b79d646cddf2fec687da5b9b502db/INCORPORATING.md)
+- [BoringSSL 集成约定](https://github.com/google/boringssl/blob/d3bf4795ad5b79d646cddf2fec687da5b9b502db/INCORPORATING.md)
 - [Xray REALITY 客户端](https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c2faae567b742c172c7b95e75c083/transport/internet/reality/reality.go)
-- [ShadowTLS v3](https://github.com/ihciah/shadow-tls/blob/02dd0bc7bae8a2011729f95021690e694fd8e43e/docs/protocol-v3-en.md)
-- [Restls Hello](https://github.com/MetaCubeX/restls-client-go/blob/6566c5f8a24420fbaeb27bc74deea2597a30f4a7/handshake_client.go)、[记录层](https://github.com/MetaCubeX/restls-client-go/blob/6566c5f8a24420fbaeb27bc74deea2597a30f4a7/conn.go)
-- [JLS 认证](https://github.com/MetaCubeX/jls-tls/blob/67adc0e2f79630fcf80f0b65278d4d1a094b812b/jls.go)、[TLS 1.3 证书路径](https://github.com/MetaCubeX/jls-tls/blob/67adc0e2f79630fcf80f0b65278d4d1a094b812b/handshake_client_tls13.go)
+- [ShadowTLS v3 规范](https://github.com/ihciah/shadow-tls/blob/02dd0bc7bae8a2011729f95021690e694fd8e43e/docs/protocol-v3-en.md)
+- [Restls 握手](https://github.com/MetaCubeX/restls-client-go/blob/6566c5f8a24420fbaeb27bc74deea2597a30f4a7/handshake_client.go)、[记录与服务端](https://github.com/MetaCubeX/restls-client-go/blob/6566c5f8a24420fbaeb27bc74deea2597a30f4a7/restls_server.go)
+- [JLS 认证](https://github.com/MetaCubeX/jls-tls/blob/67adc0e2f79630fcf80f0b65278d4d1a094b812b/jls.go)
+
+实际对端的 Go module 版本和 checksum 固定在 `tests/support/transport/tls_profiles_peer/go.mod`、`go.sum` 与依赖 lock。

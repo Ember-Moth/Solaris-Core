@@ -1,0 +1,158 @@
+--- a/include/openssl/prefix_symbols.h
++++ b/include/openssl/prefix_symbols.h
+@@ -2376,6 +2376,7 @@
+ #pragma redefine_extname SSL_set1_available_trust_anchors BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_available_trust_anchors)
+ #pragma redefine_extname SSL_set1_chain BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_chain)
+ #pragma redefine_extname SSL_set1_client_key_shares BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_client_key_shares)
++#pragma redefine_extname SSL_disable_solaris_resumption BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_disable_solaris_resumption)
+ #pragma redefine_extname SSL_solaris_client_hello_x25519_for_group BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_solaris_client_hello_x25519_for_group)
+ #pragma redefine_extname SSL_get0_solaris_eager_key_share BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_get0_solaris_eager_key_share)
+ #pragma redefine_extname SSL_set1_solaris_eager_key_shares BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_solaris_eager_key_shares)
+@@ -5558,6 +5559,7 @@
+ #define SSL_set1_available_trust_anchors BORINGSSL_ADD_PREFIX(SSL_set1_available_trust_anchors)
+ #define SSL_set1_chain BORINGSSL_ADD_PREFIX(SSL_set1_chain)
+ #define SSL_set1_client_key_shares BORINGSSL_ADD_PREFIX(SSL_set1_client_key_shares)
++#define SSL_disable_solaris_resumption BORINGSSL_ADD_PREFIX(SSL_disable_solaris_resumption)
+ #define SSL_solaris_client_hello_x25519_for_group BORINGSSL_ADD_PREFIX(SSL_solaris_client_hello_x25519_for_group)
+ #define SSL_get0_solaris_eager_key_share BORINGSSL_ADD_PREFIX(SSL_get0_solaris_eager_key_share)
+ #define SSL_set1_solaris_eager_key_shares BORINGSSL_ADD_PREFIX(SSL_set1_solaris_eager_key_shares)
+--- a/include/openssl/ssl.h
++++ b/include/openssl/ssl.h
+@@ -2993,6 +2993,16 @@
+ // export either hybrid private key and does not consume the key share.
+ OPENSSL_EXPORT int SSL_solaris_client_hello_x25519_for_group(
+     SSL *ssl, uint16_t group_id, const uint8_t peer[32], uint8_t out[32]);
++
++// Solaris full-handshake policy, ABI version 1.
++#define BORINGSSL_SOLARIS_NO_RESUMPTION_ABI 1
++// Before a client handshake, disable both TLS 1.2 and TLS 1.3 resumption:
++// discard configured sessions, omit ticket/PSK/modes extensions, and suppress
++// cache callbacks. This differs from upstream SSL_OP_NO_TICKET (RFC 5077 only).
++// Requires TLS >= 1.2 certificate authentication. External PSK, PAKE, early data,
++// DTLS, QUIC and renegotiation are rejected rather than silently downgraded.
++// The setting is per-SSL and cannot be changed after the handshake starts.
++OPENSSL_EXPORT int SSL_disable_solaris_resumption(SSL *ssl);
+ 
+ // SSL_set1_server_supported_groups_hint, when `ssl` is a client, indicates that
+ // the server is likely to support groups listed in `server_groups`, in order of
+--- a/ssl/extensions.cc
++++ b/ssl/extensions.cc
+@@ -939,8 +939,8 @@
+                                        ssl_client_hello_type_t type) {
+   const SSLImpl *const ssl = hs->ssl;
+   // TLS 1.3 uses a different ticket extension.
+-  if (hs->min_version >= TLS1_3_VERSION || type == ssl_client_hello_inner ||
+-      SSL_get_options(ssl) & SSL_OP_NO_TICKET) {
++  if (hs->config->solaris_no_resumption || hs->min_version >= TLS1_3_VERSION ||
++      type == ssl_client_hello_inner || SSL_get_options(ssl) & SSL_OP_NO_TICKET) {
+     return true;
+   }
+ 
+@@ -1934,6 +1934,7 @@
+ 
+ bool ssl_setup_pre_shared_keys(SSL_HANDSHAKE *hs) {
+   const SSLImpl *const ssl = hs->ssl;
++  if (hs->config->solaris_no_resumption) { return true; }
+   if (hs->max_version < TLS1_3_VERSION) {
+     return true;
+   }
+@@ -2242,7 +2243,7 @@
+ static bool ext_psk_key_exchange_modes_add_clienthello(
+     const SSL_HANDSHAKE *hs, CBB *out, CBB *out_compressible,
+     ssl_client_hello_type_t type) {
+-  if (hs->max_version < TLS1_3_VERSION) {
++  if (hs->config->solaris_no_resumption || hs->max_version < TLS1_3_VERSION) {
+     return true;
+   }
+   // We do not support resumption with PAKEs, so do not offer any PSK key
+--- a/ssl/handshake_client.cc
++++ b/ssl/handshake_client.cc
+@@ -468,6 +468,23 @@
+     return ssl_hs_error;
+   }
+ 
++  if (hs->config->solaris_no_resumption) {
++    if (hs->min_version < TLS1_2_VERSION || SSL_is_dtls(ssl) || SSL_is_quic(ssl) ||
++        ssl->enable_early_data || ssl->s3->initial_handshake_complete ||
++        hs->config->psk_client_callback) {
++      OPENSSL_PUT_ERROR(SSL, SSL_R_UNSUPPORTED_PROTOCOL);
++      return ssl_hs_error;
++    }
++    for (const auto &credential : hs->config->cert->credentials) {
++      if (credential->type == SSLCredentialType::kPreSharedKey) {
++        OPENSSL_PUT_ERROR(SSL, SSL_R_UNSUPPORTED_PROTOCOL);
++        return ssl_hs_error;
++      }
++    }
++    ssl->s3->solaris_no_resumption = true;
++    ssl_set_session(ssl, nullptr);
++  }
++
+   uint8_t ech_enc[EVP_HPKE_MAX_ENC_LENGTH];
+   size_t ech_enc_len;
+   if (!ssl_select_ech_config(hs, ech_enc, &ech_enc_len)) {
+@@ -488,7 +505,7 @@
+   if (!ssl_setup_pake_shares(hs)) {
+     return ssl_hs_error;
+   }
+-  if (hs->config->solaris_peer_callback && hs->pake_prover) {
++  if ((hs->config->solaris_peer_callback || hs->config->solaris_no_resumption) && hs->pake_prover) {
+     OPENSSL_PUT_ERROR(SSL, SSL_R_UNSUPPORTED_PROTOCOL);
+     return ssl_hs_error;
+   }
+@@ -1970,7 +1987,7 @@
+     }
+     // Renegotiations do not participate in session resumption.
+     if (!ssl->s3->initial_handshake_complete) {
+-      ssl->s3->established_session->not_resumable = false;
++      ssl->s3->established_session->not_resumable = ssl->s3->solaris_no_resumption;
+     }
+ 
+     hs->new_session.reset();
+--- a/ssl/internal.h
++++ b/ssl/internal.h
+@@ -2826,6 +2826,7 @@
+ };
+ 
+ struct SSL3_STATE {
++  bool solaris_no_resumption = false;
+   int solaris_record_auth = SSL_SOLARIS_AUTH_PENDING;
+   int solaris_peer_auth = SSL_SOLARIS_AUTH_PENDING;
+   uint8_t solaris_peer_context[32] = {0};
+@@ -3426,6 +3427,7 @@
+   // Auth mode is connection-local: zero = standard, one = record auth,
+   // two is reserved for authenticated peer-hello profiles.
+   InplaceVector<uint16_t, 3> solaris_eager_groups;
++  bool solaris_no_resumption = false;
+   unsigned solaris_auth_mode = 0;
+   SSL_solaris_peer_auth_callback solaris_peer_callback = nullptr;
+   void *solaris_peer_arg = nullptr;
+--- a/ssl/ssl_lib.cc
++++ b/ssl/ssl_lib.cc
+@@ -2337,6 +2337,14 @@
+   return 0;
+ }
+ 
++int SSL_disable_solaris_resumption(SSL *ssl) {
++  auto *s = FromOpaque(ssl);
++  if (!s || !s->config || s->server || s->config->solaris_handshake_started ||
++      SSL_is_dtls(s) || SSL_is_quic(s)) { return 0; }
++  s->config->solaris_no_resumption = true;
++  return 1;
++}
++
+ int SSL_set1_server_supported_groups_hint(SSL *ssl,
+                                           const uint16_t *server_groups,
+                                           size_t num_server_groups) {
+--- a/ssl/tls13_client.cc
++++ b/ssl/tls13_client.cc
+@@ -1241,6 +1241,9 @@
+     return false;
+   }
+ 
++  // Parse and authenticate the record normally, but never cache its ticket.
++  if (ssl->s3->solaris_no_resumption) { return true; }
++
+   if ((ssl->session_ctx->session_cache_mode & SSL_SESS_CACHE_CLIENT) &&
+       ssl->session_ctx->new_session_cb != nullptr &&
+       ssl->session_ctx->new_session_cb(ssl, session.get())) {

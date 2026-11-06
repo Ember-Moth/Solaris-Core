@@ -66,3 +66,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Independent TLS protocol test peers
+
+`tests/support/transport/tls_profiles_peer/` pins MetaCubeX jls-tls and
+restls-client-go, SagerNet sing-shadowtls, and XTLS REALITY as independent
+loopback test servers. Their exact module versions and checksums are in
+`go.mod`, `go.sum`, and `dependencies/lock.json`. These Go libraries and test
+binaries are not linked into or installed with the Solaris SDK. The native
+protocol test clients consume BoringSSL and the already attributed BLAKE3
+implementation; protocol references are listed in `docs/development/TLS_BACKEND.md`.

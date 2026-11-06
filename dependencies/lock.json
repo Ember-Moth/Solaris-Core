@@ -12,15 +12,35 @@
     "url": "https://codeload.github.com/google/boringssl/tar.gz/d3bf4795ad5b79d646cddf2fec687da5b9b502db",
     "sha256": "692c43fec31bb3a638859bf447a25bdd62ab240ff7b2fdb4210af10e32c6119f",
     "source_tree_sha256": "a6579edd7bf0bbc7973c7b850d685e2223d11de757075457363e51764d56a4eb",
-    "patch_abi": 1,
+    "patch_abi": 5,
     "patches": [
       {
         "path": "third_party/boringssl/patches/0001-client-hello-auth.patch",
         "sha256": "40813c82fe10f5996fec53a5c4b1116c4e143511e573968bce1a425c534bd79d",
         "capability": "TLS 1.3 ClientHello random/session-ID authentication and callback-scoped X25519; ordinary TLS unchanged"
+      },
+      {
+        "path": "third_party/boringssl/patches/0002-record-auth-and-finished.patch",
+        "sha256": "fabf751623eab53d539f3a590e79ef436f4884fbf2144cbbe4e4f5512c6db6b9",
+        "capability": "Transactional first-record AEAD authentication and exact Client Finished wire capture"
+      },
+      {
+        "path": "third_party/boringssl/patches/0003-peer-auth-and-session-binding.patch",
+        "sha256": "4359182f37fef68f06b95a3b2cfcaeb3d333f4209a5de4e5b7d561cb9c4862c0",
+        "capability": "TLS 1.3 alternate ServerHello authentication, gated certificate signature replacement and PSK-bound session identity"
+      },
+      {
+        "path": "third_party/boringssl/patches/0004-eager-and-hybrid-key-shares.patch",
+        "sha256": "5586ae5c3a2b3aa3c3a79beca6f85731f06282b6ae9c4837a78420ba10f37173",
+        "capability": "TLS 1.2 eager ECDHE and callback-scoped X25519MLKEM768 shared-secret derivation"
+      },
+      {
+        "path": "third_party/boringssl/patches/0005-disable-client-resumption.patch",
+        "capability": "Per-connection full certificate handshake policy without TLS 1.2 tickets or TLS 1.3 PSK advertisements and cache callbacks",
+        "sha256": "21735f426502762e460b7e0a7119f86d930d79fbfa03d9f657b17b8ca5ba8334"
       }
     ],
-    "stage": "M1 private TLS/crypto; protocol authentication adapters remain separate"
+    "stage": "Private prefixed TLS/crypto with verified ClientHello, record, peer-auth, key-share and resumption patches; protocol outbounds remain separate"
   },
   "libyaml": {
     "version": "0.2.5",
@@ -89,16 +109,26 @@
   "reference_jls": {
     "repository": "https://github.com/MetaCubeX/jls-tls",
     "revision": "67adc0e2f79630fcf80f0b65278d4d1a094b812b",
-    "stage": "TLS patch design reference only; not linked and not yet an interoperability claim"
+    "stage": "Independent TLS patch interoperability server only; never linked into Solaris",
+    "module": "github.com/metacubex/jls-tls",
+    "module_version": "v0.0.0-20260723084315-67adc0e2f796"
   },
   "reference_restls": {
     "repository": "https://github.com/MetaCubeX/restls-client-go",
     "revision": "6566c5f8a24420fbaeb27bc74deea2597a30f4a7",
-    "stage": "TLS patch design reference only; not linked and not yet an interoperability claim"
+    "stage": "Independent TLS patch interoperability server only; never linked into Solaris",
+    "module": "github.com/metacubex/restls-client-go",
+    "module_version": "v0.1.9"
   },
   "reference_shadowtls": {
     "repository": "https://github.com/ihciah/shadow-tls",
     "revision": "02dd0bc7bae8a2011729f95021690e694fd8e43e",
-    "stage": "TLS patch design reference only; not linked and not yet an interoperability claim"
+    "stage": "Normative ShadowTLS v3 specification reference; Go interoperability peer pinned separately"
+  },
+  "reference_tls_patch_peers": {
+    "module_lock": "tests/support/transport/tls_profiles_peer/go.mod and go.sum",
+    "reality": "github.com/xtls/reality v0.0.0-20261014101318-83f621788ca8",
+    "shadowtls": "github.com/sagernet/sing-shadowtls v0.2.1-0.20250503051639-fcd445d33c11",
+    "stage": "Independent loopback test servers; never linked into Solaris"
   }
 }

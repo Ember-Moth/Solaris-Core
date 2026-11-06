@@ -1,0 +1,276 @@
+--- a/include/openssl/prefix_symbols.h
++++ b/include/openssl/prefix_symbols.h
+@@ -2376,6 +2376,10 @@
+ #pragma redefine_extname SSL_set1_available_trust_anchors BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_available_trust_anchors)
+ #pragma redefine_extname SSL_set1_chain BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_chain)
+ #pragma redefine_extname SSL_set1_client_key_shares BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_client_key_shares)
++#pragma redefine_extname SSL_get0_solaris_client_finished BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_get0_solaris_client_finished)
++#pragma redefine_extname SSL_enable_solaris_client_finished_capture BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_enable_solaris_client_finished_capture)
++#pragma redefine_extname SSL_get_solaris_record_auth_result BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_get_solaris_record_auth_result)
++#pragma redefine_extname SSL_set_solaris_record_auth_callback BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set_solaris_record_auth_callback)
+ #pragma redefine_extname SSL_solaris_client_hello_x25519 BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_solaris_client_hello_x25519)
+ #pragma redefine_extname SSL_set_solaris_client_hello_callback BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set_solaris_client_hello_callback)
+ #pragma redefine_extname SSL_set1_curves BORINGSSL_ADD_USER_LABEL_AND_PREFIX(SSL_set1_curves)
+@@ -5549,6 +5553,10 @@
+ #define SSL_set1_available_trust_anchors BORINGSSL_ADD_PREFIX(SSL_set1_available_trust_anchors)
+ #define SSL_set1_chain BORINGSSL_ADD_PREFIX(SSL_set1_chain)
+ #define SSL_set1_client_key_shares BORINGSSL_ADD_PREFIX(SSL_set1_client_key_shares)
++#define SSL_get0_solaris_client_finished BORINGSSL_ADD_PREFIX(SSL_get0_solaris_client_finished)
++#define SSL_enable_solaris_client_finished_capture BORINGSSL_ADD_PREFIX(SSL_enable_solaris_client_finished_capture)
++#define SSL_get_solaris_record_auth_result BORINGSSL_ADD_PREFIX(SSL_get_solaris_record_auth_result)
++#define SSL_set_solaris_record_auth_callback BORINGSSL_ADD_PREFIX(SSL_set_solaris_record_auth_callback)
+ #define SSL_solaris_client_hello_x25519 BORINGSSL_ADD_PREFIX(SSL_solaris_client_hello_x25519)
+ #define SSL_set_solaris_client_hello_callback BORINGSSL_ADD_PREFIX(SSL_set_solaris_client_hello_callback)
+ #define SSL_set1_curves BORINGSSL_ADD_PREFIX(SSL_set1_curves)
+--- a/include/openssl/ssl.h
++++ b/include/openssl/ssl.h
+@@ -2912,6 +2912,41 @@
+ // On failure, |out| is zeroed. The caller must cleanse it after use.
+ OPENSSL_EXPORT int SSL_solaris_client_hello_x25519(
+     SSL *ssl, const uint8_t peer[32], uint8_t out[32]);
++
++// Solaris private record authentication and Finished capture, ABI version 1.
++// All setters are client-only and must run before the first handshake. TLS 1.2
++// and TLS 1.3 AEADs are supported; DTLS, QUIC, early data and renegotiation are
++// rejected. Record authentication never changes certificate/Finished checks.
++#define BORINGSSL_SOLARIS_RECORD_AUTH_ABI 1
++#define SSL_SOLARIS_RECORD_ALLOW_FALLBACK 1u
++#define SSL_SOLARIS_AUTH_PENDING 0
++#define SSL_SOLARIS_AUTH_OK 1
++#define SSL_SOLARIS_AUTH_REJECTED (-1)
++// Called once, on the first complete protected server record. |candidate| is a
++// private copy of the ciphertext body. Modify only that copy and return one to
++// try it with the current AEAD, or zero to fail. Header/length/sequence number
++// cannot change. The callback is synchronous and must not re-enter SSL.
++// If candidate verification fails, ALLOW_FALLBACK tries the untouched original
++// record without changing sequence/cipher state. A successful fallback remains
++// unauthenticated. Without that flag, candidate failure is fatal.
++typedef int (*SSL_solaris_record_auth_callback)(
++    SSL *ssl, const uint8_t header[5], uint8_t *candidate,
++    size_t ciphertext_len, void *arg);
++OPENSSL_EXPORT int SSL_set_solaris_record_auth_callback(
++    SSL *ssl, unsigned flags, SSL_solaris_record_auth_callback callback, void *arg);
++// OK is reported only after the complete TLS handshake has succeeded. Before
++// then, returns PENDING, or REJECTED if the candidate failed. Neither a valid
++// certificate nor a successful unmodified-record fallback implies protocol auth.
++OPENSSL_EXPORT int SSL_get_solaris_record_auth_result(const SSL *ssl);
++// Isolate Client Finished into its own record flight and keep its exact sealed
++// records (at most 4096 bytes). A partial BIO write never captures it twice.
++OPENSSL_EXPORT int SSL_enable_solaris_client_finished_capture(SSL *ssl);
++// Returns a borrowed concatenation of complete TLS records, available only once
++// the handshake succeeded and BoringSSL flushed the flight to its BIO. With a
++// memory BIO the caller must additionally wait for its transport write barrier.
++// The bytes live until SSL_free/SSL_clear. Output is null/zero on failure.
++OPENSSL_EXPORT int SSL_get0_solaris_client_finished(
++    const SSL *ssl, const uint8_t **out, size_t *out_len);
+ 
+ // SSL_set1_server_supported_groups_hint, when `ssl` is a client, indicates that
+ // the server is likely to support groups listed in `server_groups`, in order of
+--- a/ssl/handshake_client.cc
++++ b/ssl/handshake_client.cc
+@@ -410,6 +410,14 @@
+ 
+   // Freeze the version range.
+   if (!ssl_get_version_range(hs, &hs->min_version, &hs->max_version)) {
++    return ssl_hs_error;
++  }
++
++  if ((hs->config->solaris_record_callback || hs->config->solaris_capture_finished) &&
++      (hs->min_version < TLS1_2_VERSION || SSL_is_dtls(ssl) || SSL_is_quic(ssl) ||
++       !hs->config->client_ech_config_list.empty() || ssl->enable_early_data ||
++       ssl->s3->initial_handshake_complete)) {
++    OPENSSL_PUT_ERROR(SSL, SSL_R_UNSUPPORTED_PROTOCOL);
+     return ssl_hs_error;
+   }
+ 
+--- a/ssl/internal.h
++++ b/ssl/internal.h
+@@ -2815,6 +2815,10 @@
+ };
+ 
+ struct SSL3_STATE {
++  int solaris_record_auth = SSL_SOLARIS_AUTH_PENDING;
++  Array<uint8_t> solaris_client_finished;
++  bool solaris_client_finished_flushed = false;
++
+   static constexpr bool kAllowUniquePtr = true;
+ 
+   SSL3_STATE();
+@@ -3405,6 +3409,13 @@
+   // ssl is a non-owning pointer to the parent `SSL` object.
+   SSLImpl *const ssl = nullptr;
+ 
++  // Auth mode is connection-local: zero = standard, one = record auth,
++  // two is reserved for authenticated peer-hello profiles.
++  unsigned solaris_auth_mode = 0;
++  SSL_solaris_record_auth_callback solaris_record_callback = nullptr;
++  void *solaris_record_arg = nullptr;
++  unsigned solaris_record_flags = 0;
++  bool solaris_capture_finished = false;
+   SSL_solaris_client_hello_callback solaris_hello_callback = nullptr;
+   void *solaris_hello_arg = nullptr;
+   unsigned solaris_hello_fields = 0;
+--- a/ssl/s3_both.cc
++++ b/ssl/s3_both.cc
+@@ -91,6 +91,15 @@
+ }
+ 
+ bool tls_add_message(SSLImpl *ssl, Array<uint8_t> msg) {
++  const bool capture_finished = !ssl->server && ssl->config &&
++      ssl->config->solaris_capture_finished && !msg.empty() &&
++      msg[0] == SSL3_MT_FINISHED;
++  size_t finished_offset = 0;
++  if (capture_finished) {
++    if (!ssl->s3->solaris_client_finished.empty() || SSL_is_quic(ssl) ||
++        !tls_flush_pending_hs_data(ssl)) { return false; }
++    finished_offset = ssl->s3->pending_flight ? ssl->s3->pending_flight->length : 0;
++  }
+   // Pack handshake data into the minimal number of records. This avoids
+   // unnecessary encryption overhead, notably in TLS 1.3 where we send several
+   // encrypted messages in a row. For now, we do not do this for the null
+@@ -136,6 +145,18 @@
+     }
+   }
+ 
++  if (capture_finished) {
++    if (!tls_flush_pending_hs_data(ssl) || !ssl->s3->pending_flight) { return false; }
++    const size_t end = ssl->s3->pending_flight->length;
++    if (end < finished_offset || end - finished_offset > 4096 ||
++        !ssl->s3->solaris_client_finished.CopyFrom(Span(
++            reinterpret_cast<const uint8_t *>(ssl->s3->pending_flight->data) +
++                finished_offset, end - finished_offset))) {
++      OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
++      return false;
++    }
++  }
++
+   ssl_do_msg_callback(ssl, 1 /* write */, SSL3_RT_HANDSHAKE, msg);
+   // TODO(svaldez): Move this up a layer to fix abstraction for SSLTranscript on
+   // hs.
+@@ -250,6 +271,9 @@
+     return -1;
+   }
+ 
++  if (!ssl->s3->solaris_client_finished.empty()) {
++    ssl->s3->solaris_client_finished_flushed = true;
++  }
+   ssl->s3->pending_flight.reset();
+   ssl->s3->pending_flight_offset = 0;
+   return 1;
+--- a/ssl/ssl_lib.cc
++++ b/ssl/ssl_lib.cc
+@@ -2231,6 +2231,51 @@
+   return 0;
+ }
+ 
++int SSL_set_solaris_record_auth_callback(
++    SSL *ssl, unsigned flags, SSL_solaris_record_auth_callback callback, void *arg) {
++  auto *s = FromOpaque(ssl);
++  if (!s || !s->config || s->server || s->config->solaris_handshake_started ||
++      (s->config->solaris_auth_mode != 0 && s->config->solaris_auth_mode != 1) ||
++      (flags & ~SSL_SOLARIS_RECORD_ALLOW_FALLBACK) != 0 || callback == nullptr ||
++      SSL_is_dtls(s) || SSL_is_quic(s)) { return 0; }
++  s->config->solaris_auth_mode = 1;
++  s->config->solaris_record_flags = flags;
++  s->config->solaris_record_callback = callback;
++  s->config->solaris_record_arg = arg;
++  return 1;
++}
++
++int SSL_get_solaris_record_auth_result(const SSL *ssl) {
++  const auto *s = FromOpaque(ssl);
++  if (!s || s->s3->solaris_record_auth == SSL_SOLARIS_AUTH_REJECTED) {
++    return SSL_SOLARIS_AUTH_REJECTED;
++  }
++  return s->s3->initial_handshake_complete && !SSL_in_init(s)
++      ? s->s3->solaris_record_auth : SSL_SOLARIS_AUTH_PENDING;
++}
++
++int SSL_enable_solaris_client_finished_capture(SSL *ssl) {
++  auto *s = FromOpaque(ssl);
++  if (!s || !s->config || s->server || s->config->solaris_handshake_started ||
++      SSL_is_dtls(s) || SSL_is_quic(s)) { return 0; }
++  s->config->solaris_capture_finished = true;
++  return 1;
++}
++
++int SSL_get0_solaris_client_finished(const SSL *ssl, const uint8_t **out,
++                                     size_t *out_len) {
++  if (out) { *out = nullptr; }
++  if (out_len) { *out_len = 0; }
++  if (!out || !out_len) { return 0; }
++  const auto *s = FromOpaque(ssl);
++  if (!s || !s->s3->initial_handshake_complete || SSL_in_init(s) ||
++      s->s3->solaris_client_finished.empty() ||
++      !s->s3->solaris_client_finished_flushed) { return 0; }
++  *out = s->s3->solaris_client_finished.data();
++  *out_len = s->s3->solaris_client_finished.size();
++  return 1;
++}
++
+ int SSL_set1_server_supported_groups_hint(SSL *ssl,
+                                           const uint16_t *server_groups,
+                                           size_t num_server_groups) {
+--- a/ssl/tls_record.cc
++++ b/ssl/tls_record.cc
+@@ -178,8 +178,58 @@
+     return ssl_open_record_error;
+   }
+ 
+-  // Decrypt the body in-place.
+-  if (!ssl->s3->aead_read_ctx->Open(
++  // Trial decryption uses a private copy. Neither the original record nor
++  // sequence state changes on candidate failure. CBC contexts are excluded.
++  bool candidate_opened = false;
++  if (!ssl->server && ssl->config && ssl->config->solaris_record_callback &&
++      !ssl->s3->aead_read_ctx->is_null_cipher() &&
++      ssl->s3->solaris_record_auth == SSL_SOLARIS_AUTH_PENDING) {
++    const SSL_CIPHER *cipher = ssl->s3->aead_read_ctx->cipher();
++    if (ssl->s3->initial_handshake_complete || ssl->s3->read_sequence != 0 ||
++        (cipher->algorithm_enc != SSL_AES128GCM &&
++         cipher->algorithm_enc != SSL_AES256GCM &&
++         cipher->algorithm_enc != SSL_CHACHA20POLY1305)) {
++      ssl->s3->solaris_record_auth = SSL_SOLARIS_AUTH_REJECTED;
++      OPENSSL_PUT_ERROR(SSL, SSL_R_UNSUPPORTED_PROTOCOL);
++      *out_alert = SSL_AD_HANDSHAKE_FAILURE;
++      return ssl_open_record_error;
++    }
++    Array<uint8_t> candidate;
++    if (!candidate.CopyFrom(Span<const uint8_t>(CBS_data(&body), CBS_len(&body))) ||
++        ssl->config->solaris_record_callback(ssl, header.data(), candidate.data(),
++            candidate.size(), ssl->config->solaris_record_arg) != 1) {
++      ssl->s3->solaris_record_auth = SSL_SOLARIS_AUTH_REJECTED;
++      if (!candidate.empty()) { OPENSSL_cleanse(candidate.data(), candidate.size()); }
++      OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
++      *out_alert = SSL_AD_INTERNAL_ERROR;
++      return ssl_open_record_error;
++    }
++    Span<uint8_t> plaintext;
++    ERR_set_mark();
++    candidate_opened = ssl->s3->aead_read_ctx->Open(
++        &plaintext, type, version, ssl->s3->read_sequence, header, Span(candidate.data(), candidate.size()));
++    // Pop only errors from the trial; if the queue was empty, this clears it.
++    ERR_pop_to_mark();
++    if (candidate_opened) {
++      size_t offset = plaintext.data() - candidate.data();
++      auto original = Span(const_cast<uint8_t *>(CBS_data(&body)), CBS_len(&body));
++      OPENSSL_memcpy(original.data() + offset, plaintext.data(), plaintext.size());
++      *out = original.subspan(offset, plaintext.size());
++      ssl->s3->solaris_record_auth = SSL_SOLARIS_AUTH_OK;
++    } else {
++      ssl->s3->solaris_record_auth = SSL_SOLARIS_AUTH_REJECTED;
++    }
++    OPENSSL_cleanse(candidate.data(), candidate.size());
++    if (!candidate_opened && !(ssl->config->solaris_record_flags &
++                              SSL_SOLARIS_RECORD_ALLOW_FALLBACK)) {
++      OPENSSL_PUT_ERROR(SSL, SSL_R_DECRYPTION_FAILED_OR_BAD_RECORD_MAC);
++      *out_alert = SSL_AD_BAD_RECORD_MAC;
++      return ssl_open_record_error;
++    }
++  }
++
++  // Decrypt the unmodified body only when no candidate was committed.
++  if (!candidate_opened && !ssl->s3->aead_read_ctx->Open(
+           out, type, version, ssl->s3->read_sequence, header,
+           Span(const_cast<uint8_t *>(CBS_data(&body)), CBS_len(&body)))) {
+     if (ssl->s3->skip_early_data && !ssl->s3->aead_read_ctx->is_null_cipher()) {

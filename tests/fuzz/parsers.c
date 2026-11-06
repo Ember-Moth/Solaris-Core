@@ -5,6 +5,11 @@
 #include "codec/xudp/codec.h"
 #include "observe/probe/http_codec.h"
 #include "contracts/module/module.h"
+#if SOLARIS_HAS_TLS
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/mem.h>
+#endif
 #if SOLARIS_HAS_VLESS
 #include "adapters/outbound/vless/internal.h"
 #include "adapters/outbound/vless/vision/codec.h"
@@ -280,7 +285,7 @@ static void socks5_fuzz(solaris_budget_t *budget, const uint8_t *data, size_t si
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     if (size < 3u || size > 196608u) return 0;
-    unsigned int parser = data[0] % 19u, mode = data[1]; fuzz_environment_t environment = {.failure = data[2] & 63u, .random = 1u};
+    unsigned int parser = data[0] % 20u, mode = data[1]; fuzz_environment_t environment = {.failure = data[2] & 63u, .random = 1u};
     data += 3u; size -= 3u;
     solaris_runtime_services_t services; solaris_runtime_services_init(&services); services.context = &environment; services.allocate = allocate;
     solaris_budget_t *budget = NULL; if (solaris_budget_create(8u * 1024u * 1024u, &services, &budget) != SOLARIS_OK) return 0;
@@ -323,6 +328,23 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     case 18: {
         solaris_address_t source; solaris_buffer_t *out = NULL;
         (void)solaris_socks5_packet_decode(budget, data, size, &source, &out); solaris_buffer_release(out); break;
+    }
+#endif
+#if SOLARIS_HAS_TLS
+    case 19: {
+        SSL_CTX *context = SSL_CTX_new(TLS_method());
+        if (context != NULL) {
+            SSL_SESSION *session = SSL_SESSION_from_bytes(data, size, context);
+            if (session != NULL && SSL_SESSION_is_resumable(session)) {
+                uint8_t *encoded = NULL; size_t encoded_size;
+                if (SSL_SESSION_to_bytes(session, &encoded, &encoded_size)) {
+                    SSL_SESSION *copy = SSL_SESSION_from_bytes(encoded, encoded_size, context);
+                    assert(copy != NULL); SSL_SESSION_free(copy); OPENSSL_free(encoded);
+                }
+            }
+            SSL_SESSION_free(session); SSL_CTX_free(context); ERR_clear_error();
+        }
+        break;
     }
 #endif
     default: break;

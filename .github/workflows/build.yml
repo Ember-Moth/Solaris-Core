@@ -78,17 +78,20 @@ jobs:
         run: >-
           cmake -S . -B build-fuzz -G Ninja -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-          -DSOLARIS_BUILD_FUZZERS=ON -DSOLARIS_BUILD_EXAMPLES=OFF
+          -DSOLARIS_BUILD_FUZZERS=ON -DSOLARIS_BUILD_EXAMPLES=OFF -DSOLARIS_SANITIZER=address
+          "-DCMAKE_CXX_FLAGS=-fsanitize=fuzzer-no-link,address,undefined"
       - name: Build fuzzer and independent fixture tools
         run: >-
           cmake --build build-fuzz --parallel --target solaris_parser_fuzz
           solaris_vless_encryption_tests solaris_ss_control_peer solaris_encryption_control_peer
+          solaris_tls_profiles_tests solaris_tls_profiles_peer
       - name: Generate protocol corpus
         run: >-
           python tests/fuzz/seeds.py build-fuzz/seeds
           --ss-control build-fuzz/reference-tools/ss-control
           --encryption-control build-fuzz/reference-tools/encryption-control
           --encryption-client build-fuzz/solaris_vless_encryption_tests
+          --tls-client build-fuzz/solaris_tls_profiles_tests --tls-peer build-fuzz/reference-tools/tls-profiles-peer
       - name: Exercise parsers with ASan and UBSan
         run: |
           mkdir -p build-fuzz/corpus build-fuzz/artifacts

@@ -6,6 +6,7 @@ import importlib.util
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import tempfile
 
 
@@ -15,6 +16,8 @@ def main():
     parser.add_argument("--ss-control")
     parser.add_argument("--encryption-control")
     parser.add_argument("--encryption-client")
+    parser.add_argument("--tls-peer")
+    parser.add_argument("--tls-client")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -92,6 +95,15 @@ def main():
                             seed(13, Path(directory, f"{name}-{mode}.bin").read_bytes(), mode, name)
                 finally:
                     peer.terminate(); peer.wait(timeout=5)
+    if bool(args.tls_peer) != bool(args.tls_client):
+        raise ValueError("TLS peer and client must be provided together")
+    if args.tls_peer:
+        with tempfile.TemporaryDirectory(prefix="solaris-fuzz-tls-") as directory:
+            driver = Path(__file__).resolve().parents[1] / "support/transport/tls_profiles.py"
+            subprocess.run([sys.executable, str(driver), args.tls_client, "--peer", args.tls_peer,
+                            "--seed-dir", directory], check=True, timeout=180)
+            for file in sorted(Path(directory).glob("*.session")):
+                seed(19, file.read_bytes(), name=file.stem)
     print(f"Created {count} independent parser seeds in {args.output}")
 
 

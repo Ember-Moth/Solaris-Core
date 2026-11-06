@@ -13,7 +13,7 @@ ctest --test-dir build --build-config Debug --output-on-failure
 cmake --install build --config Debug --prefix "$PWD/build/install"
 ```
 
-需要 CMake 3.24+、C11/C++17 编译器和 Go（BoringSSL 前缀审计及独立测试对端的构建工具；发布数据面没有 Go runtime）。启用 BoringSSL 需要宿主 Python 3.9+ 和 Git 核验及应用补丁；测试还需要 OpenSSL 命令行用于临时证书。默认共享库，静态构建添加 `-DBUILD_SHARED_LIBS=OFF`。首次配置下载并校验固定的 libuv 与 BoringSSL 0.20261020.0，并严格应用项目内补丁；协议测试构建 lock 中固定版本的 sing-box 与 Xray（后者需要 Go 1.27+，支持 Go 自动工具链下载），只启动 loopback 代理对端。
+需要 CMake 3.24+、C11/C++17 编译器和 Go（BoringSSL 前缀审计及独立测试对端的构建工具；发布数据面没有 Go runtime）。启用 BoringSSL 需要宿主 Python 3.9+ 和 Git 核验及应用补丁；测试还需要 OpenSSL 命令行用于临时证书。默认共享库，静态构建添加 `-DBUILD_SHARED_LIBS=OFF`。首次配置下载并校验固定的 libuv 与 BoringSSL 0.20261020.0，并严格应用项目内五个补丁；协议测试构建 lock 中固定版本的 sing-box、Xray 和 TLS 认证对端（需要 Go 1.27+，支持 Go 自动工具链下载），只启动 loopback 代理对端。
 
 内置出站可用 `-DSOLARIS_ENABLE_DIRECT=OFF`、`-DSOLARIS_ENABLE_BLOCK=OFF`、`-DSOLARIS_ENABLE_VLESS=OFF`、`-DSOLARIS_ENABLE_SHADOWSOCKS=OFF`、`-DSOLARIS_ENABLE_ANYTLS=OFF`、`-DSOLARIS_ENABLE_SOCKS5=OFF` 分别裁剪。关闭 VLESS、Shadowsocks 与 AnyTLS 后可同时关闭 `SOLARIS_ENABLE_PROXY_TRANSPORT` 与 `SOLARIS_ENABLE_TLS`，移除 BoringSSL 依赖；SOCKS5 可独立保留。已有固定版本对端可通过 `SOLARIS_REFERENCE_PEER`（sing-box）和 `SOLARIS_XRAY_REFERENCE_PEER`（Xray）指定；配置和注册行为见 [M1 实现说明](docs/development/M1_DATA_PATH.md)。
 

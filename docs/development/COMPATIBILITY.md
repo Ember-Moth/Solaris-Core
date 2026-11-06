@@ -1,6 +1,6 @@
 # 配置、协议与平台兼容矩阵
 
-日期：2026-11-05。固定参考见 [依赖与参考 lock](../../dependencies/lock.json)。状态只反映当前实现，目标阶段不表示已经可用。
+日期：2026-11-06。固定参考见 [依赖与参考 lock](../../dependencies/lock.json)。状态只反映当前实现，目标阶段不表示已经可用。
 
 | 能力 | 当前状态 | 任务/验收 |
 | --- | --- | --- |
@@ -30,7 +30,7 @@
 | 内部 select/固定 plan | 共享选择修订、worker 实例、存量 plan 固定；健康状态独立；无 YAML/公开业务 SDK 入口 | M1-07 / G-WORKER |
 | 连接追踪与流量 | 单 flow/association 记录、有限关闭历史、跨线程关闭；USER/PROBE 分桶与物理 socket payload 计数 | M1-07 / G-LIFE |
 | HTTP(S) 单次测速 | 固定 plan 的 HEAD 请求，完整响应头与写入完成才成功；显式 HTTPS 信任、整体 deadline、取消和迟到结果处理 | M1-07 / G-INTEROP |
-| REALITY/ShadowTLS/Restls/JLS/ECH/XHTTP/指纹等额外组合 | 未接入；BoringSSL 版本和 Hello 认证底座已固定，[补丁设计](TLS_BACKEND.md) 区分已实现 hook 与待实现协议；Vision 本身已在 M1-06d 验证 | M2-03/M5-02 / G-INTEROP |
+| REALITY/ShadowTLS/Restls/JLS/ECH/XHTTP/指纹等额外组合 | 生产出站/配置尚未接入；[五个 TLS 库补丁](TLS_BACKEND.md) 已实现，四种认证握手经独立对端验证；Vision 已在 M1-06d 验证 | M2-03/M5-02 / G-INTEROP |
 | Windows/Linux/OpenHarmony | M0 Windows/Linux CI 已通过；M1 远端 CI 尚未验收，平台接入未实现 | M0-05/M5-03 / G-BUILD/G-DEVICE |
 | QUIC/Hysteria2/TUIC/DoQ/HTTP3 | 尚未实现 | M6-01 / G-INTEROP |
 | 多核吞吐、尾延迟、能耗改善 | 未测量 | M6-03–M6-04 / G-PERF |

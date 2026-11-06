@@ -1,6 +1,6 @@
 # Solaris Core 开发计划
 
-更新日期：2026-11-05。本文件是实现进度与阶段状态的唯一维护位置。
+更新日期：2026-11-06。本文件是实现进度与阶段状态的唯一维护位置。
 
 ## 1. 当前状态
 
@@ -9,7 +9,8 @@
 | 目标、框架、SDK、UDP/NAT 与多核设计整理 | 已完成文档基线 | 见 [文档索引](../README.md) |
 | 历史文档归档 | 已完成 | 原 README、嵌入说明、四份草案与调查证据 |
 | M0 新工程骨架、Solaris 命名与基础 SDK | 已提交并推送 `8fa5180`，CI 通过 | 新 CMake/模块清单、私有 libuv、异步生命周期与安装消费 |
-| M1 框架与首批数据面 | M1-01–M1-08 的实现与本机功能验收完成 | 四种构建各 40 项；外部重复互通限制见最终记录 |
+| M1 框架与首批数据面 | M1-01–M1-08 的实现与本机功能验收完成 | M1 基线四种构建各 40 项；后续 TLS 扩展矩阵为 45 项，见下方记录 |
+| TLS 库扩展 | 五个补丁已实现，本机验收通过 | 四协议独立握手/交接测试；生产出站和配置接入仍分开推进 |
 | M2–M6 | 未开始 | 下一阶段为 YAML、路由、入站与宿主业务 API；不从 M1 推导支持 |
 | 新 SDK/生命周期/安装消费验收 | macOS arm64 通过 | 共享/静态、完整 40 项、独立 C/C++ 消费、ASan/UBSan 与 TSan；详见最终记录 |
 | 远端 CI | M0 CI 通过；M1 远端 CI 尚未验收 | 不把 M0 的通过状态延伸到新代码 |
@@ -188,7 +189,7 @@ M1-01–M1-08 已实现，G-BUILD/G-MODULE/G-LIFE/G-WORKER 及本阶段 G-UDP/G-
 
 - BoringSSL 固定为 0.20261020.0，锁定 tag/commit/归档与源码树哈希；干净复制、顺序补丁及结果树校验接入 CMake。
   Hello 认证/X25519 基础补丁已实现，真实 TLS transcript、PSK binder/恢复、错误身份、HRR/时序拒绝和补丁完整性检查通过。
-  REALITY、ShadowTLS、Restls、JLS 的完整接入仍按 [TLS 设计](TLS_BACKEND.md) 推进；不把 hook 计为协议支持。
+  此处为当时首个补丁的记录；后续完整 TLS 补丁实现见下一节。四协议的生产出站接入仍与底层能力分开验收。
 - SOCKS5 经 registry/factory 接入，无认证/用户名密码、TCP/UDP、双 worker、IPv4/IPv6/domain、wildcard/domain relay、
   备用源端口、异常报文丢弃、控制连接故障、整体 deadline、DNS 取消、真实 close 屏障与分配失败检查通过。
   select/固定 plan、测速、观测和 association 复用原有入口，未向通用层添加 SOCKS5 特判。
@@ -223,6 +224,25 @@ fuzz RSS 是 fuzz 进程的观测值，不是内核生产内存或吞吐结论�
   证据为 `m1-xudp-port-collision.txt`、`m1-encryption-peer-boundary.txt` 及其中引用的原始日志。
 
 以上记录是提交前的本机验证；不包含 M1 远端 CI、系统 VPN、其他 OS 本机或性能测量证据。构建产物清理后，表中的本机日志、下载的参考源码和临时诊断文件不随源码保留；验证入口保留在 tests/ 和 scripts/ 中，可按测试规范重新运行。
+
+### TLS 库扩展验收（2026-11-06）
+
+已实现 [TLS 后端文档](TLS_BACKEND.md) 中的全部库级补丁，基线保持 BoringSSL 0.20261020.0，patch ABI 升为 5。
+补丁按顺序和 SHA-256 校验，未建立长期 fork 分支；协议密码运算和线格式位于测试消费者，未新增占位出站或配置字段。
+
+- 新增记录 AEAD 事务试探/回滚、精确 Finished 密文捕获、JLS ServerHello 认证与受限签名替代、PSK 绑定的身份/SNI/generation 恢复标记。
+- TLS 1.2 提前生成并复用 X25519/P-256/P-384；TLS 1.3 hybrid 认证可直接使用实际 share 中的 X25519 部分，不导出私钥。
+- 新增单连接禁用恢复策略，真正停止 TLS 1.3 PSK/modes 广告；`SSL_OP_NO_TICKET` 单独不能完成此要求。
+- 固定 Go 参考端运行 53 个独立场景：REALITY mixed/hybrid-only、ShadowTLS v3、Restls TLS 1.2 三组曲线与 TLS 1.3 的完整/恢复、JLS 完整/恢复及元数据隔离。
+  正向场景实际完成双向数据。负向包括错误密码/身份/short ID/时间、未认证回退、签名算法与空签名、篡改 session 标记等。
+  服务端用真实流量密钥重新封装的错误 Finished 仍被拒绝，证明替代证书认证没有绕过 Finished 验证。
+- 七组 TLS 补丁/recipe 契约通过，包含碎片 BIO、输入/输出生命周期、CBC 拒绝、DTLS/QUIC/ECH 和不兼容设置在发送前拒绝。
+- macOS arm64、Clang 23.1.4：共享、静态、ASan/UBSan、TSan 全部各 45 项通过，包含普通 TLS、Vision raw、现有协议、私有符号与搬迁后的独立 C/C++ 消费。
+  TLS-only 静态构建 27 项、完全关闭出站/TLS 的静态构建 17 项通过。日志位于 `build-tls-bootstrap/` 的相应 `*-test.log`。
+- fuzz 增加 TLS session 解析/序列化入口，使用独立握手产生的合成票据和变异标记。20 个入口、280 个种子、61 秒 124,770 次输入，无 ASan/UBSan/预算断言错误；峰值 RSS 521 MiB。
+  本次专用 fuzz 构建也插桩 BoringSSL C++，结果是解析器验证，不是生产吞吐或内存承诺。
+
+以上是本次提交前的本机验证记录，不包含远端 CI 或其他 OS 本机验证。M1 已记录的 Xray UDP 长重复对端/环境限制保持独立，不由 TLS 补丁通过记录推导为已修复。
 
 ## 5. M2：基础配置和宿主业务闭环
 
