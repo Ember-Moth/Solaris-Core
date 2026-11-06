@@ -10,4 +10,7 @@ solaris_status_t solaris_socks_address_write(const solaris_address_t *address,
     uint8_t *out, size_t capacity, size_t *written);
 solaris_status_t solaris_socks_address_read(const uint8_t *data, size_t size,
     solaris_address_t *out, size_t *consumed);
+/* Metadata variant also permits port zero, e.g. SOCKS5 UDP ASSOCIATE. */
+solaris_status_t solaris_socks_address_decode(const uint8_t *data, size_t size,
+    solaris_address_t *out, size_t *consumed);
 #endif

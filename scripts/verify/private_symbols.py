@@ -18,10 +18,16 @@ def main():
             symbols.add(parts[-1].removeprefix('_'))
     if not symbols:
         raise SystemExit('No defined C globals found in dependency archive')
-    unexpected = sorted(symbol for symbol in symbols if not symbol.startswith(args.prefix + '_'))
+    # Clang's ASan archive bookkeeping is compiler-generated, not a vendor API.
+    # Mach-O emits this with an extra ABI underscore; normalize only this
+    # exact compiler symbol so dependency functions still require a prefix.
+    instrumentation = 'asan_globals_registered'
+    unexpected = sorted(symbol for symbol in symbols
+                        if not symbol.startswith(args.prefix + '_') and symbol.lstrip('_') != instrumentation)
     if unexpected:
         raise SystemExit('Unprefixed dependency globals: ' + ', '.join(unexpected))
-    print(f'{len(symbols)} dependency globals use {args.prefix}_')
+    count = sum(symbol.startswith(args.prefix + '_') for symbol in symbols)
+    print(f'{count} dependency globals use {args.prefix}_')
 
 
 if __name__ == '__main__':

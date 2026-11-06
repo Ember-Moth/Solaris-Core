@@ -378,6 +378,27 @@
         "tun",
         "ip_packet"
       ]
+    },
+    {
+      "name": "proxy_inbound",
+      "option": "SOLARIS_ENABLE_PROXY_INBOUND",
+      "sources": [
+        "src/adapters/inbound/proxy/server.c",
+        "src/adapters/inbound/proxy/socks5.c",
+        "src/adapters/inbound/proxy/udp.c",
+        "src/adapters/inbound/proxy/upgrade.c",
+        "src/codec/http/proxy.c"
+      ],
+      "dependencies": [
+        "llhttp"
+      ],
+      "requires": [
+        "runtime",
+        "io",
+        "flow_plan",
+        "tcp_relay",
+        "udp_association"
+      ]
     }
   ],
   "public_headers": [

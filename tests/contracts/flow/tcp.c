@@ -6,7 +6,7 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #x); abort(); } } while (0)
 enum { TRANSFER, CANCEL_INBOUND_OPEN, CANCEL_OUTBOUND_OPEN, CANCEL_WRITE, CANCEL_SHUTDOWN,
-    STOP_WRITE, STOP_SHUTDOWN, REJECT_OPEN, REJECT_WRITE, REJECT_SHUTDOWN, PAUSE_FAILURE, OVERSIZED, REJECT_PREPARE, ALLOC_PREPARE };
+    STOP_WRITE, STOP_SHUTDOWN, REJECT_OPEN, REJECT_WRITE, REJECT_SHUTDOWN, PAUSE_FAILURE, OVERSIZED, REJECT_PREPARE, ALLOC_PREPARE, CLOSE_ON_CONNECT, CLOSE_ON_CONNECT_FAILURE };
 typedef struct environment environment_t;
 typedef struct mock {
     environment_t *env;
@@ -33,7 +33,8 @@ struct environment {
     solaris_deferred_t release;
     solaris_test_event_t ready, pending, cancelled, done;
     int mode, allocation_failure;
-    unsigned int factory_calls, plan_releases, relay_closes;
+    unsigned int factory_calls, plan_releases, relay_closes, connects;
+    solaris_status_t connect_status;
     solaris_status_t status;
 };
 static const uint8_t inputs[2][23] = {
@@ -148,7 +149,7 @@ static solaris_status_t open_stream(void *state, const solaris_address_t *peer,
     const solaris_stream_callbacks_t *callbacks, void *context, solaris_stream_t **out)
 {
     environment_t *e = state; CHECK(peer->port == 443u); e->factory_calls++;
-    if (e->mode == REJECT_OPEN) return SOLARIS_EACCESS;
+    if (e->mode == REJECT_OPEN || e->mode == CLOSE_ON_CONNECT_FAILURE) return SOLARIS_EACCESS;
     mock_t *m = &e->mocks[1]; m->callbacks = *callbacks; m->context = context; m->accepted = 1; *out = &m->stream;
     if (m->hold_open) solaris_test_event_signal(&e->pending); else queue(e, &m->open);
     return SOLARIS_OK;
@@ -175,6 +176,13 @@ static void release_pending(void *context)
         if (m->shutting) queue(e, &m->shutdown);
     }
 }
+static void relay_connected(void *context, solaris_status_t status)
+{
+    environment_t *e = context;
+    CHECK(++e->connects == 1 && !e->relay_closes && !e->plan_releases);
+    e->connect_status = status;
+    if (e->mode == CLOSE_ON_CONNECT || e->mode == CLOSE_ON_CONNECT_FAILURE) solaris_tcp_relay_close(e->relay);
+}
 static void start(void *context, solaris_status_t status)
 {
     environment_t *e = context; CHECK(status == SOLARIS_OK);
@@ -192,7 +200,7 @@ static void start(void *context, solaris_status_t status)
         m->hold_shutdown = e->mode == CANCEL_SHUTDOWN || e->mode == STOP_SHUTDOWN;
     }
     solaris_dial_plan_t plan = {.outbound = &e->outbound, .context = e, .release = plan_released};
-    solaris_tcp_relay_options_t options = {.owner = e->owner, .pending_byte_limit = 32u, .context = e, .on_close = relay_closed};
+    solaris_tcp_relay_options_t options = {.owner = e->owner, .pending_byte_limit = 32u, .context = e, .on_close = relay_closed, .on_connect = relay_connected};
     CHECK(solaris_address_parse("1.2.3.4", 443u, &options.destination) == SOLARIS_OK);
     if (e->mode == REJECT_PREPARE) options.pending_byte_limit = 0u;
     if (e->mode == ALLOC_PREPARE) e->allocation_failure = 1;
@@ -236,9 +244,12 @@ static void run(int mode)
     CHECK(e.plan_releases == 1u);
     if (mode == REJECT_PREPARE || mode == ALLOC_PREPARE) CHECK(e.relay_closes == 0u && e.factory_calls == 0u);
     else {
-        solaris_status_t expected = mode == TRANSFER ? SOLARIS_OK : mode >= CANCEL_INBOUND_OPEN && mode <= STOP_SHUTDOWN ? SOLARIS_ECANCELLED :
-            mode == REJECT_OPEN ? SOLARIS_EACCESS : mode == REJECT_SHUTDOWN ? SOLARIS_ENOTSUP : mode == OVERSIZED ? SOLARIS_EOVERFLOW : SOLARIS_EIO;
-        CHECK(e.relay_closes == 1u && e.status == expected);
+        solaris_status_t expected = mode == TRANSFER ? SOLARIS_OK : mode == CLOSE_ON_CONNECT ? SOLARIS_ECANCELLED : mode >= CANCEL_INBOUND_OPEN && mode <= STOP_SHUTDOWN ? SOLARIS_ECANCELLED :
+            (mode == REJECT_OPEN || mode == CLOSE_ON_CONNECT_FAILURE) ? SOLARIS_EACCESS : mode == REJECT_SHUTDOWN ? SOLARIS_ENOTSUP : mode == OVERSIZED ? SOLARIS_EOVERFLOW : SOLARIS_EIO;
+        CHECK(e.relay_closes == 1u && e.status == expected && e.connects == 1);
+        solaris_status_t connect_status = mode == CANCEL_INBOUND_OPEN || mode == CANCEL_OUTBOUND_OPEN ? SOLARIS_ECANCELLED :
+            mode == PAUSE_FAILURE ? SOLARIS_EIO : mode == REJECT_OPEN || mode == CLOSE_ON_CONNECT_FAILURE ? SOLARIS_EACCESS : SOLARIS_OK;
+        CHECK(e.connect_status == connect_status);
         CHECK(e.factory_calls == (mode == CANCEL_INBOUND_OPEN || mode == PAUSE_FAILURE ? 0u : 1u));
         for (size_t i = 0u; i < 2u; ++i) {
             mock_t *m = &e.mocks[i];
@@ -257,6 +268,6 @@ static void run(int mode)
 }
 int main(void)
 {
-    for (int mode = TRANSFER; mode <= ALLOC_PREPARE; ++mode) run(mode);
+    for (int mode = TRANSFER; mode <= CLOSE_ON_CONNECT_FAILURE; ++mode) run(mode);
     puts("TCP relay: chunked bidirectional transfer, pause/backpressure, dual FIN, late open/write/shutdown after cancel/stop, rejection and plan barriers passed"); return 0;
 }

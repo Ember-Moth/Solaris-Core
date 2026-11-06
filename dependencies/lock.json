@@ -141,5 +141,12 @@
     "url": "https://codeload.github.com/SagerNet/sing-tun/tar.gz/ddaa4ca25e3bcb776d6ce81f4477b3becb5426de",
     "sha256": "90c3faa6d5940adbd30d09cbae50915c879caa016c398c3758185cf9a5a9a9ac",
     "stage": "Platform and system TCP NAT implementation reference; not linked into Solaris"
+  },
+  "llhttp": {
+    "version": "9.4.3",
+    "revision": "0e815792b167a9bd8ace259b95b7da953776c288",
+    "url": "https://codeload.github.com/nodejs/llhttp/tar.gz/0e815792b167a9bd8ace259b95b7da953776c288",
+    "sha256": "1b3fad37b6d0b32119a3924f7dc1e1472ffeb7c085ddb374dcec4df5edd36056",
+    "stage": "Strict HTTP/1 inbound parsing; private prefixed static dependency"
   }
 }

@@ -93,3 +93,13 @@ Apple TUN and Wintun behavior reference. Its source is GPL-3.0-or-later;
 it is not linked into or distributed with the Solaris SDK.
 
 https://github.com/SagerNet/sing-tun
+
+## llhttp HTTP parser
+
+Enabling `SOLARIS_ENABLE_PROXY_INBOUND` links llhttp 9.4.3, commit
+`0e815792b167a9bd8ace259b95b7da953776c288`, under its MIT license.
+The archive checksum is locked in `dependencies/lock.json`. All generated C
+identifiers are privately prefixed; upstream sources are fetched without edits.
+The upstream `LICENSE-MIT` is installed in `share/Solaris/licenses/llhttp/`.
+
+https://github.com/nodejs/llhttp

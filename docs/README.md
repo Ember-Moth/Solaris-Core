@@ -16,6 +16,8 @@
 实施配套：[M0 工程决策](development/M0_DECISIONS.md)、[已实现 SDK 用法](development/SDK.md)、[配置/协议/平台兼容矩阵](development/COMPATIBILITY.md)。目标规范不等于当前已支持能力。
 
 当前实现说明：[M1 模块工厂、UDP association 与统一 I/O](development/M1_DATA_PATH.md)。
+代理入站：[HTTP/SOCKS5/mixed、认证与 TCP/UDP 生命周期](development/PROXY_INBOUND.md)。
+
 TUN 接入：[lwIP/system、宿主 packet I/O 与平台设备层](development/TUN.md)。
 TLS 依赖和协议扩展：[BoringSSL 固定基线、补丁与认证边界](development/TLS_BACKEND.md)。
 

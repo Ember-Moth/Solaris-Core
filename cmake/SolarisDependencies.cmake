@@ -3,7 +3,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/dependencies/lock.json")
 file(READ "${PROJECT_SOURCE_DIR}/dependencies/lock.json" solaris_dependency_lock)
 foreach(dependency IN LISTS SOLARIS_DEPENDENCIES)
-    if(NOT dependency MATCHES "^(libuv|boringssl|blake3|lwip)$")
+    if(NOT dependency MATCHES "^(libuv|boringssl|blake3|lwip|llhttp)$")
         message(FATAL_ERROR "No build recipe for declared dependency: ${dependency}")
     endif()
 endforeach()
@@ -38,6 +38,32 @@ endif()
 
 set(SOLARIS_PRIVATE_LIBRARIES uv_a)
 set(SOLARIS_PACKAGE_NEEDS_THREADS OFF)
+if("llhttp" IN_LIST SOLARIS_DEPENDENCIES)
+    string(JSON solaris_llhttp_url GET "${solaris_dependency_lock}" llhttp url)
+    string(JSON solaris_llhttp_hash GET "${solaris_dependency_lock}" llhttp sha256)
+    FetchContent_Declare(solaris_llhttp URL "${solaris_llhttp_url}"
+        URL_HASH "SHA256=${solaris_llhttp_hash}" DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        SOURCE_SUBDIR solaris-populate-only)
+    FetchContent_MakeAvailable(solaris_llhttp)
+    add_library(solaris_llhttp STATIC "${solaris_llhttp_SOURCE_DIR}/src/llhttp.c"
+        "${solaris_llhttp_SOURCE_DIR}/src/api.c" "${solaris_llhttp_SOURCE_DIR}/src/http.c")
+    set_target_properties(solaris_llhttp PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
+        POSITION_INDEPENDENT_CODE ON C_VISIBILITY_PRESET hidden EXPORT_NAME private_llhttp)
+    target_include_directories(solaris_llhttp PUBLIC
+        "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third_party/llhttp>"
+        "$<BUILD_INTERFACE:${solaris_llhttp_SOURCE_DIR}/include>")
+    if(MSVC)
+        target_compile_options(solaris_llhttp PRIVATE "/FI${PROJECT_SOURCE_DIR}/third_party/llhttp/solaris_llhttp_symbols.h")
+    else()
+        target_compile_options(solaris_llhttp PRIVATE -include "${PROJECT_SOURCE_DIR}/third_party/llhttp/solaris_llhttp_symbols.h")
+    endif()
+    if(SOLARIS_SANITIZER STREQUAL "address")
+        target_compile_options(solaris_llhttp PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    elseif(SOLARIS_SANITIZER STREQUAL "thread")
+        target_compile_options(solaris_llhttp PRIVATE -fsanitize=thread -fno-omit-frame-pointer)
+    endif()
+    list(APPEND SOLARIS_PRIVATE_LIBRARIES solaris_llhttp)
+endif()
 if("lwip" IN_LIST SOLARIS_DEPENDENCIES)
     string(JSON solaris_lwip_url GET "${solaris_dependency_lock}" lwip url)
     string(JSON solaris_lwip_hash GET "${solaris_dependency_lock}" lwip sha256)

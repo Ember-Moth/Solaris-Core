@@ -90,8 +90,8 @@ static solaris_status_t accept_tcp(void *context, const solaris_address_t *sourc
         source, destination, &plan);
     if (rc == SOLARIS_OK && tun->scope.cancelled) rc = SOLARIS_ECLOSED;
     if (rc == SOLARIS_OK) {
-        solaris_tcp_relay_options_t options = { tun->scope.owner, *destination,
-            tun->options.pending_byte_limit, entry, tcp_closed };
+        solaris_tcp_relay_options_t options = {.owner = tun->scope.owner, .destination = *destination,
+            .pending_byte_limit = tun->options.pending_byte_limit, .context = entry, .on_close = tcp_closed};
         rc = solaris_tcp_relay_prepare(&options, &plan, callbacks, stream_context, &entry->relay);
     }
     if (rc != SOLARIS_OK) {

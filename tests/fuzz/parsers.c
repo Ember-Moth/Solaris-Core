@@ -4,6 +4,9 @@
 #include "codec/uot/codec.h"
 #include "codec/xudp/codec.h"
 #include "codec/ip/packet.h"
+#if SOLARIS_HAS_PROXY_INBOUND
+#include "codec/http/proxy.h"
+#endif
 #include "observe/probe/http_codec.h"
 #include "contracts/module/module.h"
 #if SOLARIS_HAS_TLS
@@ -283,14 +286,58 @@ static void socks5_fuzz(solaris_budget_t *budget, const uint8_t *data, size_t si
     solaris_socks5_clear(&state, sizeof(state));
 }
 #endif
+#if SOLARIS_HAS_PROXY_INBOUND
+static void http_proxy_fuzz(solaris_budget_t *budget, const uint8_t *data, size_t size, unsigned mode)
+{
+    size_t header = 0;
+    for (size_t i = 3; i < size && i < 32768; ++i)
+        if (!memcmp(data + i - 3, "\r\n\r\n", 4)) { header = i + 1; break; }
+    if (!header) header = size;
+    solaris_http_metadata_t meta;
+    solaris_http_request_t *request = NULL; solaris_buffer_t *output = NULL;
+    solaris_status_t rc = solaris_http_request_create(budget, data, header, 32768, &meta, &output, &request);
+    solaris_http_credentials_clear(&meta); solaris_buffer_release(output);
+    if (rc != SOLARIS_OK) return;
+    if (!meta.connect && !meta.websocket) {
+        size_t offset = header;
+        for (unsigned i = 0; i < 64 && !solaris_http_request_complete(request); ++i) {
+            size_t used, n = size - offset, chunk = i ? 8192 : mode % 64 + 1;
+            if (n > chunk) n = chunk;
+            rc = solaris_http_request_body(request, data + offset, n, &used, &output);
+            assert(used <= n); solaris_buffer_release(output); offset += used;
+            if (rc != SOLARIS_OK || !n) break;
+            assert(used || solaris_http_request_complete(request));
+        }
+        (void)solaris_http_request_eof(request);
+    }
+    solaris_http_request_destroy(request);
+}
+#endif
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     if (size < 3u || size > 196608u) return 0;
-    unsigned int parser = data[0] % 21u, mode = data[1]; fuzz_environment_t environment = {.failure = data[2] & 63u, .random = 1u};
+    unsigned int parser = data[0] % 23u, mode = data[1]; fuzz_environment_t environment = {.failure = data[2] & 63u, .random = 1u};
     data += 3u; size -= 3u;
     solaris_runtime_services_t services; solaris_runtime_services_init(&services); services.context = &environment; services.allocate = allocate;
     solaris_budget_t *budget = NULL; if (solaris_budget_create(8u * 1024u * 1024u, &services, &budget) != SOLARIS_OK) return 0;
     switch (parser) {
+#if SOLARIS_HAS_PROXY_INBOUND
+    case 21: http_proxy_fuzz(budget, data, size, mode); break;
+    case 22: {
+        solaris_http_upgrade_response_t *response = NULL;
+        if (solaris_http_upgrade_response_create(budget, 32768, &response) != SOLARIS_OK) break;
+        for (size_t offset = 0; offset < size;) {
+            size_t n = size - offset, chunk = offset ? 4096 : mode % 64 + 1;
+            if (n > chunk) n = chunk;
+            solaris_buffer_t *output = NULL;
+            solaris_status_t rc = solaris_http_upgrade_response_feed(response, data + offset, n, &output);
+            solaris_buffer_release(output); offset += n;
+            if (rc != SOLARIS_OK) break;
+        }
+        (void)solaris_http_upgrade_response_eof(response);
+        solaris_http_upgrade_response_destroy(response); break;
+    }
+#endif
     case 20: {
         solaris_ip_packet_t packet;
         if (solaris_ip_parse(data, size, mode & 1u, &packet) == SOLARIS_OK) {

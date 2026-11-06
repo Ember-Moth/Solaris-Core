@@ -21,7 +21,8 @@
 | AnyTLS/session/UoT | AnyTLS v1/v2 协商、TLS、padding 更新、session 空闲策略与共享 UoT 已接入；本机双 worker/双栈/域名互通；协议无半关闭 | M1-06g/h / G-INTEROP |
 | SOCKS5 outbound 扩展试验 | 已实现 CONNECT/UDP ASSOCIATE、无认证或用户名密码、双栈/domain、控制连接生命周期、select/测速/观测；无 BIND、UDP 分片或 TLS 配置入口 | M1-08 / G-MODULE/G-INTEROP |
 | mihomo YAML：公共语法/proxies/rules/mode/select | 不支持；尚无公开配置 API | M2-01–M2-03 / G-CONFIG |
-| SOCKS5/HTTP/mixed 入站与控制 SDK | 尚未实现 | M2-04–M2-05 |
+| SOCKS5/HTTP/mixed 内部入站 | TCP、UDP ASSOCIATE、认证、多监听器、WebSocket Upgrade/CONNECT WS/WSS 和回环互通已实现；普通 HTTP 每连接单请求；尚无 YAML/公开 SDK 激活入口；[用法与限制](PROXY_INBOUND.md) | M2-04 内部路径已实现 / G-LIFE/G-UDP |
+| 配置与控制 SDK | 完整节点/连接控制尚未实现 | M2-03/M2-05 |
 | prepare/commit/retire 配置事务 | 尚未实现 | M2-06 / G-RELOAD |
 | 最小系统域名解析 | TCP 与 UDP association 使用 getaddrinfo；底层 Direct UDP send 仍只接收数值地址 | M1-04/M1-05 |
 | DNS policy/DoH/DoT/Fake-IP | 尚未实现 | M3-01–M3-03 / G-UDP |

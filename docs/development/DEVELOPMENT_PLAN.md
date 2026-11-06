@@ -252,7 +252,7 @@ fuzz RSS 是 fuzz 进程的观测值，不是内核生产内存或吞吐结论�
 | M2-01 | YAML 编译、源位置诊断、默认值、公共/模块字段、引用图和能力校验 | 固定样本差分；错误配置不静默降级 |
 | M2-02 | 顺序路由解释器、metadata、基础域名/CIDR/网络/端口/MATCH、rule/global/direct | 首匹配、延迟解析、no-resolve 与 UDP 过滤用例 |
 | M2-03 | 基础协议 YAML→registry→运行时接通，安全/传输组合逐项登记 | 支持列表没有“有代码但入口不可达”的项目 |
-| M2-04 | SOCKS5/HTTP/mixed 入站、多入站、认证和统一 TCP/UDP 转发 | 宿主可实际代理；SOCKS UDP 与 TUN 目标接口共用 association |
+| M2-04 | [SOCKS5/HTTP/mixed 内部入站](PROXY_INBOUND.md)、多监听器、认证和统一 TCP/UDP 已实现；YAML/公开 SDK 激活待 M2-01–03 | 独立回环与 curl 互通；SOCKS UDP 与 TUN 共用 association；普通 HTTP 每连接单请求 |
 | M2-05 | 组/节点控制、测速、统计、连接快照、关闭、日志与事件 SDK | 客户端不需要 HTTP 控制器即可使用完整基础功能 |
 | M2-06 | prepare/commit/retire、候选失败保持现状、监听变更计划 | 既有 TCP/UDP 不被错误释放或悄悄换 plan |
 | M2-07 | 宿主样例加载一份基础 mihomo YAML 完成代理与控制 | G-CONFIG、G-RELOAD 和声明组合的互通证据完整 |

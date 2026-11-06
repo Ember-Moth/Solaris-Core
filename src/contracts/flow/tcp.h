@@ -9,6 +9,10 @@ typedef struct solaris_tcp_relay_options {
     size_t pending_byte_limit;
     void *context;
     void (*on_close)(void *context, solaris_status_t status);
+    /* Optional, delivered once when outbound open settles, before close.
+     * The inbound may defer reads/writes until its protocol reply drains.
+     * Reentrant relay close is permitted. */
+    void (*on_connect)(void *context, solaris_status_t status);
 } solaris_tcp_relay_options_t;
 /* Owner-only. On success consumes/clears plan and installs the callbacks for
  * an accepted, initially paused inbound stream. That stream must then deliver

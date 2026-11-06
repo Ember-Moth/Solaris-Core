@@ -81,6 +81,24 @@ def main():
         seed(17, greeting + b"\5\0\0\3\x09localhost\1\xbb", mode)
     for raw in [b"\0\0\0" + address, b"\0\0\0" + address + b"payload", b"\0\0\1" + address, b"\0\0\0\xff"]:
         seed(18, raw)
+    for mode in (0, 1, 31, 63):
+        for request in (
+            b"GET http://example.com/a?q=1 HTTP/1.1\r\nHost: example.com\r\nProxy-Authorization: Basic dXNlcjpwYXNz\r\n\r\n",
+            b"CONNECT [::1]:443 HTTP/1.1\r\nHost: [::1]:443\r\n\r\n",
+            b"POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\nX-Test: tail\r\n\r\nGET /next HTTP/1.0\r\n\r\n",
+            b"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 3\r\n\r\nabcGET /next HTTP/1.0\r\n\r\n",
+            b"GET / HTTP/1.1\r\nHost: a\r\n" + b"X:y\r\n" * 700 + b"\r\n",
+        ):
+            seed(21, request, mode, "http-inbound")
+    for mode in (0, 31, 63):
+        seed(21, b"GET ws://example.com/chat HTTP/1.1\r\nHost: example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n", mode, "websocket")
+        for response in (
+            b"HTTP/1.1 103 Early Hints\r\nLink: </a>\r\n\r\nHTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n\x81\x02hi",
+            b"HTTP/1.1 403 Forbidden\r\nContent-Length: 3\r\n\r\nno!PIPELINED",
+            b"HTTP/1.1 403 Forbidden\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nno!\r\n0\r\nX-Trailer: good\r\n\r\n",
+            b"HTTP/1.1 403 Forbidden\r\n\r\nclosed body",
+        ):
+            seed(22, response, mode, "upgrade-response")
     if args.ss_control:
         with tempfile.TemporaryDirectory(prefix="solaris-fuzz-ss-") as directory:
             subprocess.run([args.ss_control, "fixtures", directory], check=True, timeout=20)

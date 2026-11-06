@@ -16,18 +16,30 @@ struct solaris_tcp_relay {
     solaris_dial_plan_t plan;
     relay_side_t side[2];
     solaris_status_t status;
+    int connect_delivered, failing;
 };
 static void pump(relay_side_t *side);
 static void fail(solaris_tcp_relay_t *relay, solaris_status_t status)
 {
-    if (!relay->scope.cancelled) {
+    if (!relay->scope.cancelled && !relay->failing) {
+        relay->failing = 1;
         relay->status = status;
+        if (!relay->connect_delivered) {
+            relay->connect_delivered = 1;
+            if (relay->options.on_connect)
+                relay->options.on_connect(relay->options.context, status == SOLARIS_OK ? SOLARIS_ECLOSED : status);
+        }
         solaris_scope_cancel(&relay->scope);
     }
 }
 static void cancel(void *context)
 {
     solaris_tcp_relay_t *relay = context;
+    if (!relay->connect_delivered) {
+        relay->connect_delivered = 1;
+        if (relay->options.on_connect)
+            relay->options.on_connect(relay->options.context, SOLARIS_ECANCELLED);
+    }
     for (size_t i = 0; i < 2; ++i) {
         relay_side_t *side = &relay->side[i];
         if (side->stream) (void)solaris_stream_close(side->stream);
@@ -148,7 +160,11 @@ static void opened(void *context, solaris_stream_t *stream, solaris_status_t sta
             &callbacks, &relay->side[1], &relay->side[1].stream);
         if (rc != SOLARIS_OK) { fail(relay, rc); return; }
         solaris_scope_retain(&relay->scope);
-    } else { pump(side); pump(side->peer); }
+    } else {
+        relay->connect_delivered = 1;
+        if (relay->options.on_connect) relay->options.on_connect(relay->options.context, SOLARIS_OK);
+        pump(side); pump(side->peer);
+    }
 }
 solaris_status_t solaris_tcp_relay_prepare(const solaris_tcp_relay_options_t *options,
     solaris_dial_plan_t *plan, solaris_stream_callbacks_t *inbound_callbacks, void **context,

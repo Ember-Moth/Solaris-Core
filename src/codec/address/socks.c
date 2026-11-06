@@ -27,7 +27,7 @@ solaris_status_t solaris_socks_address_write(const solaris_address_t *a,
     if (a->port == 0u) return SOLARIS_EINVAL;
     return solaris_socks_address_encode(a, out, capacity, written);
 }
-solaris_status_t solaris_socks_address_read(const uint8_t *data, size_t size,
+solaris_status_t solaris_socks_address_decode(const uint8_t *data, size_t size,
     solaris_address_t *out, size_t *consumed)
 {
     *consumed = 0u;
@@ -46,6 +46,14 @@ solaris_status_t solaris_socks_address_read(const uint8_t *data, size_t size,
         memcpy(address.host, data + n, length);
     } else memcpy(address.ip, data + n, length);
     n += length; address.port = (uint16_t)(((uint16_t)data[n] << 8) | data[n + 1u]); n += 2u;
-    if (address.port == 0u) return SOLARIS_EIO;
     *out = address; *consumed = n; return SOLARIS_OK;
+}
+solaris_status_t solaris_socks_address_read(const uint8_t *data, size_t size,
+    solaris_address_t *out, size_t *consumed)
+{
+    solaris_address_t address;
+    solaris_status_t rc = solaris_socks_address_decode(data, size, &address, consumed);
+    if (rc == SOLARIS_OK && address.port == 0u) { *consumed = 0; return SOLARIS_EIO; }
+    if (rc == SOLARIS_OK) *out = address;
+    return rc;
 }
