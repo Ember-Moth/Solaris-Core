@@ -40,6 +40,11 @@ solaris_status_t solaris_engine_stop(solaris_engine_t *engine,
                                   operation_id, error);
 }
 
+solaris_status_t solaris_engine_cancel(solaris_engine_t *engine, uint64_t operation_id, solaris_error_t *error)
+{
+    return solaris_runtime_cancel(engine, operation_id, error);
+}
+
 solaris_status_t solaris_engine_get_snapshot(solaris_engine_t *engine,
                                              solaris_engine_snapshot_t *snapshot,
                                              solaris_error_t *error)

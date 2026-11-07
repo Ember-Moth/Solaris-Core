@@ -5,7 +5,9 @@
       "sources": [
         "src/api/engine/engine.c",
         "src/api/common/error.c",
-        "src/api/common/version.c"
+        "src/api/common/version.c",
+        "src/api/observe/probe.c",
+        "src/api/observe/observe.c"
       ],
       "dependencies": []
     },
@@ -18,7 +20,15 @@
         "src/runtime/memory/buffer.c",
         "src/dns/system/resolver.c",
         "src/runtime/security/replay.c",
-        "src/runtime/metrics/traffic.c"
+        "src/runtime/metrics/traffic.c",
+        "src/runtime/operation/ledger.c",
+        "src/runtime/config/publication.c",
+        "src/runtime/config/slots.c",
+        "src/runtime/config/modules.c",
+        "src/runtime/config/worker.c",
+        "src/runtime/config/manager.c",
+        "src/runtime/config/control.c",
+        "src/observe/log/service.c"
       ],
       "dependencies": [
         "libuv"
@@ -157,7 +167,8 @@
       ],
       "requires": [
         "runtime",
-        "io"
+        "io",
+        "route_policy"
       ]
     },
     {
@@ -397,16 +408,51 @@
         "io",
         "flow_plan",
         "tcp_relay",
-        "udp_association"
+        "udp_association",
+        "route_policy"
+      ]
+    },
+    {
+      "name": "route_policy",
+      "sources": [
+        "src/policy/route/rule.c",
+        "src/policy/route/job.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "flow_plan",
+        "runtime"
+      ]
+    },
+    {
+      "name": "yaml_config",
+      "sources": [
+        "src/config/yaml/allocator.c",
+        "src/config/yaml/parser.c",
+        "src/config/image/api.c",
+        "src/config/image/memory.c",
+        "src/config/image/compile.c"
+      ],
+      "dependencies": [
+        "libyaml"
+      ],
+      "requires": [
+        "route_policy",
+        "registry"
       ]
     }
   ],
   "public_headers": [
     "include/solaris/core.h",
+    "include/solaris/config.h",
     "include/solaris/engine.h",
     "include/solaris/error.h",
     "include/solaris/export.h",
-    "include/solaris/version.h"
+    "include/solaris/version.h",
+    "include/solaris/control.h",
+    "include/solaris/observe.h",
+    "include/solaris/probe.h",
+    "include/solaris/log.h"
   ],
   "exports": [
     "solaris_engine_create",
@@ -417,6 +463,53 @@
     "solaris_engine_start",
     "solaris_engine_stop",
     "solaris_status_string",
-    "solaris_version_string"
+    "solaris_version_string",
+    "solaris_engine_cancel",
+    "solaris_config_options_init",
+    "solaris_config_compile_bytes",
+    "solaris_config_compile_file",
+    "solaris_config_retain",
+    "solaris_config_release",
+    "solaris_config_get_snapshot",
+    "solaris_config_get_node",
+    "solaris_diagnostics_retain",
+    "solaris_diagnostics_release",
+    "solaris_diagnostics_count",
+    "solaris_diagnostics_get",
+    "solaris_config_prepare_options_init",
+    "solaris_engine_prepare_config",
+    "solaris_engine_commit_config",
+    "solaris_prepared_config_retain",
+    "solaris_prepared_config_release",
+    "solaris_prepared_config_get_snapshot",
+    "solaris_prepared_config_get_listener",
+    "solaris_engine_get_config_snapshot",
+    "solaris_engine_get_bound_listener",
+    "solaris_config_get_listener",
+    "solaris_engine_set_mode",
+    "solaris_engine_select",
+    "solaris_engine_get_control_snapshot",
+    "solaris_control_snapshot_retain",
+    "solaris_control_snapshot_release",
+    "solaris_control_snapshot_get_info",
+    "solaris_control_snapshot_get_node",
+    "solaris_control_snapshot_get_group",
+    "solaris_control_snapshot_get_group_member",
+    "solaris_engine_get_connections",
+    "solaris_connection_list_retain",
+    "solaris_connection_list_release",
+    "solaris_connection_list_count",
+    "solaris_connection_list_get",
+    "solaris_engine_get_connection",
+    "solaris_engine_get_traffic",
+    "solaris_engine_close_connection",
+    "solaris_engine_close_connections",
+    "solaris_probe_options_init",
+    "solaris_engine_probe",
+    "solaris_engine_get_logs",
+    "solaris_log_snapshot_retain",
+    "solaris_log_snapshot_release",
+    "solaris_log_snapshot_get_info",
+    "solaris_log_snapshot_get_record"
   ]
 }

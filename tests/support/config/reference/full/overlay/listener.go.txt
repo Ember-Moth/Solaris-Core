@@ -1,0 +1,6 @@
+// Test-only bridge to the fixed listener's pure address/zero-port helpers.
+package listener
+func SolarisReferenceAddress(host string, port int, allowLAN bool) (string, bool) {
+    value := genAddr(host, port, allowLAN)
+    return value, portIsZero(value)
+}

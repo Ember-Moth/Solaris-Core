@@ -1,0 +1,19 @@
+listeners:
+  - name: socks
+    type: socks
+    listen: 127.0.0.1
+    port: 1080
+  - name: mixed
+    type: mixed
+    listen: 127.0.0.1
+    port: 1081
+    udp: false
+proxies:
+  - name: anytls
+    type: anytls
+    server: localhost
+    port: 443
+    password: synthetic
+    idle-session-timeout: 5
+    idle-session-check-interval: 6
+rules: ["DOMAIN,.Example.COM.,DIRECT", "MATCH,REJECT"]

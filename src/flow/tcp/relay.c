@@ -128,7 +128,7 @@ static void received(void *context, solaris_stream_t *stream, const solaris_buff
     side->pending = buffer; side->offset = 0; solaris_buffer_retain(buffer);
     pump(side);
 }
-static void eof(void *context, solaris_stream_t *stream)
+static void stream_eof(void *context, solaris_stream_t *stream)
 {
     relay_side_t *side = context; (void)stream;
     side->eof = 1; pump(side);
@@ -145,7 +145,7 @@ static void closed(void *context, solaris_stream_t *stream, solaris_status_t sta
     fail(side->relay, status);
     solaris_scope_release(&side->relay->scope);
 }
-static const solaris_stream_callbacks_t callbacks = { opened, received, eof, writable, closed };
+static const solaris_stream_callbacks_t callbacks = { opened, received, stream_eof, writable, closed };
 static void opened(void *context, solaris_stream_t *stream, solaris_status_t status)
 {
     relay_side_t *side = context;

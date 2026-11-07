@@ -10,8 +10,9 @@ typedef struct solaris_traffic_snapshot {
     uint32_t saturated;
 } solaris_traffic_snapshot_t;
 /* Physical socket payload bytes, counted once below TLS/protocol/session
- * transforms. IP/TCP/UDP headers are not included. Use one counter per worker
- * and aggregate snapshots; references and snapshots are thread-safe. */
+ * transforms. IP/TCP/UDP headers are not included. A counter may be shared by
+ * workers for engine totals; references, updates and snapshots are thread-safe.
+ * Snapshot fields are observational rather than one simultaneous I/O fence. */
 solaris_status_t solaris_traffic_counter_create(solaris_budget_t *budget, solaris_traffic_counter_t **out);
 void solaris_traffic_counter_retain(solaris_traffic_counter_t *counter);
 void solaris_traffic_counter_release(solaris_traffic_counter_t *counter);

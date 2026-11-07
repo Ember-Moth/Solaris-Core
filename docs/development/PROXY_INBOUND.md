@@ -4,8 +4,8 @@
 `SOLARIS_ENABLE_PROXY_INBOUND`（默认开启）会构建全部三个入口并链接固定版本 llhttp；设为
 `OFF` 后这些源码和 llhttp 依赖均移除。它不依赖 SOCKS5 出站、TLS 或 TUN 模块。
 
-当前入口位于 `src/contracts/inbound/proxy.h`，供内核集成使用；尚未作为公开 SDK 导出，也未接入
-YAML、路由配置编译或 reload。HTTP 代理监听本身是明文 TCP；HTTPS 目标通过 CONNECT 隧道访问。
+内部入口位于 `src/contracts/inbound/proxy.h`，供内核集成使用。宿主通过公开 YAML 编译和 prepare/commit
+激活、更新监听，见 [SDK 用法](SDK.md)。HTTP 代理监听本身是明文 TCP；HTTPS 目标通过 CONNECT 隧道访问。
 
 ## 能力与边界
 
@@ -50,6 +50,14 @@ solaris_status_t rc = solaris_proxy_inbound_create(&options, &inbound);
 用户名。返回一个拥有独立 lease 的 `solaris_dial_plan_t`，例如通过 `solaris_module_plan_acquire`；
 框架负责释放。TCP 在连接开始时选择一次，UDP 在 association 建立时选择一次，后续目标映射保持
 同一个 plan；选择回调不执行网络 I/O。返回失败时也不得遗留未交回的资源。
+
+运行时 bundle 使用异步 `route` 接口：TCP 接纳即持有对应代际，完成握手后启动 route job；等待 DNS 期间
+暂停读取并保留有界首包。UDP 首条有效包在登记关联时固定配置视图，排队处理不重新读取 active；后续包复用同一关联。
+route job 取消、超时、连接关闭或 stop 后排空 resolver 回调，不能迟到拨号。旧同步 `select` 仍供固定 plan 的内部宿主使用。
+
+`detached_create/accept` 将不可变入站代际与物理监听分开，配置管理器以同一 active publication 派发新连接。
+`retire` 只关闭新接纳，存量连接继续；`close` 取消全部连接和关联。候选失败使用 parent scope 等待完整析构，
+包括工厂拒绝后仍在进行的 native close。
 
 认证和选择回调可以关闭自己的监听器。`create` 拒绝时输出为 NULL，不产生宿主关闭回调；接受后
 `on_close` 等待监听器、TCP/UDP、关联、已接受 I/O 和延后回调全部排空。对象在该回调返回后失效。
@@ -105,6 +113,10 @@ TCP 控制连接 EOF、异常关闭、收到额外控制数据、入站关闭或
 UDP socket。回复保留实际目标地址；空 UDP payload 有效。超大包和预算不足显式丢弃并计数。
 关闭后的旧 endpoint 不会投递到新连接。
 
+association 空闲回收不关闭 SOCKS5 控制 TCP；控制连接仍受每入站连接数上限约束。后续有效包可重新创建关联。
+配置更新时，旧控制连接按逻辑入口 ID 查询当前配置，不以旧物理端口定位；认证策略变化、入口删除或禁用 UDP
+会拒绝新关联。已经建立的关联保留旧 plan，包括提交后新建目标映射或地址族 lane。
+
 ## 验证入口
 
 - `http_proxy_codec_contract`：严格 framing、认证编码、逐字节拆分正文/trailer、pipeline 隔离、截断和字段数限制。
@@ -115,6 +127,8 @@ UDP socket。回复保留实际目标地址；空 UDP payload 有效。超大包
   首帧边界、压缩扩展、分片交错控制帧、拒绝/超时、长响应头、分配失败与关闭排空；需要 openssl 生成测试证书。
   `python3 tests/support/inbound/proxy/websocket.py build/solaris_proxy_inbound_tests --duration 310` 可追加 16 条并发连接的持续心跳验证。
 - `tcp_relay_contract`：成功/失败/取消的 `on_connect` 恰好一次，含回调内关闭和写入排空。
+- `routed_inbound_contract`：detached 接纳/退休、异步首包固定视图、一次本地解析、空闲重建、认证更新、队列满和迟到 DNS 取消。
+- `runtime_proxy_contract`、`runtime_protocol_contract`：从 YAML 经公开 SDK 激活、事务回滚/更新、双 worker 与固定独立协议对端。
 - `llhttp_private_symbols`、`installed_consumer`、模块裁剪检查：私有符号、依赖安装与独立静态/共享消费。
 - `solaris_parser_fuzz` 的 parser id 21：HTTP 请求头、正文和 trailer，parser id 22 覆盖 Upgrade 响应及拒绝正文，均含分配失败；llhttp 本体也参与覆盖率与 ASan/UBSan 插桩。
 

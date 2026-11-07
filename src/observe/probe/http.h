@@ -11,6 +11,13 @@ typedef struct solaris_http_probe_options {
     solaris_tls_context_t *trust; /* required for https, chain/identity checked */
     solaris_tracker_t *tracker; /* optional separate PROBE traffic bucket */
     solaris_select_control_t *health; /* optional node health publication */
+    /* Optional same-owner full cleanup fence, including rejection after the
+     * probe scope was admitted. Its storage outlives the probe destructor. */
+    solaris_scope_t *parent_scope;
+    /* Optional owner-clock absolute deadline, including caller queue/trust
+     * preparation. Zero preserves the standalone relative-timeout contract. */
+    uint64_t deadline_ns;
+    uint64_t config_revision;
 } solaris_http_probe_options_t;
 typedef struct solaris_http_probe_result {
     solaris_status_t status;

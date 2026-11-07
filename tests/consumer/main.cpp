@@ -3,6 +3,10 @@
 
 static_assert(std::is_standard_layout<solaris_engine_snapshot_t>::value,
               "SDK snapshot must be a plain C value");
+static_assert(std::is_standard_layout<solaris_connection_info_t>::value &&
+              std::is_standard_layout<solaris_probe_result_t>::value &&
+              std::is_standard_layout<solaris_control_result_t>::value,
+              "Control and observation results must be plain C values");
 
 int main()
 {

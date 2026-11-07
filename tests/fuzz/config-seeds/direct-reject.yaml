@@ -1,0 +1,5 @@
+proxies:
+  - {name: named-direct, type: direct}
+  - {name: named-reject, type: reject}
+  - {name: tcp-direct, type: direct, udp: false}
+rules: ["MATCH,named-reject"]

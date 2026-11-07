@@ -30,6 +30,10 @@ typedef struct solaris_module_services {
     solaris_replay_store_t *replay;
     solaris_crypto_source_t crypto;
     solaris_diagnostic_sink_t diagnostic;
+    /* Optional same-owner construction/drain barrier. The registry retains it
+     * after instance scope initialization and releases it only after complete
+     * destruction, including rejected factories with asynchronous cleanup. */
+    solaris_scope_t *parent_scope;
 } solaris_module_services_t;
 
 /* Descriptors and their strings have process lifetime. compile/create never

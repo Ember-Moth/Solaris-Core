@@ -6,6 +6,7 @@
 static void pump(void *context);
 static void inbound_cancel(void *context);
 static void connection_timeout(proxy_connection_t *c);
+static void maybe_retired(solaris_proxy_inbound_t *in);
 static void inbound_fail(solaris_proxy_inbound_t *inbound, solaris_status_t status)
 {
     if (!inbound->scope.cancelled) {
@@ -25,6 +26,8 @@ static void connection_cancel(void *context)
     proxy_connection_t *c = context;
     if (c->native)
         (void)solaris_stream_close(c->native);
+    if (c->route_job)
+        solaris_route_cancel(c->route_job);
     if (c->relay)
         solaris_tcp_relay_close(c->relay);
     solaris_proxy_udp_cancel(c);
@@ -34,7 +37,7 @@ static void connection_done(void *context)
 {
     proxy_connection_t *c = context;
     solaris_proxy_inbound_t *in = c->inbound;
-    assert(!c->native && !c->relay && !c->datagram && !c->upgrade_done);
+    assert(!c->native && !c->relay && !c->datagram && !c->upgrade_done && !c->route_job);
     proxy_connection_t **cursor = &in->connections;
     while (*cursor != c) {
         assert(*cursor);
@@ -49,7 +52,13 @@ static void connection_done(void *context)
     solaris_memory_free(c->input);
     solaris_buffer_release(c->header);
     solaris_buffer_release(c->reply);
+    int context_retained = c->context_retained;
+    solaris_proxy_context_t capture = c->capture;
+    solaris_tracker_finish(c->flow, c->status);
     solaris_memory_free(c);
+    maybe_retired(in);
+    if (context_retained)
+        capture.release(capture.context);
     solaris_scope_release(&in->scope);
 }
 void solaris_proxy_schedule(proxy_connection_t *c)
@@ -69,6 +78,10 @@ void solaris_proxy_consume(proxy_connection_t *c, size_t n)
 }
 static int expired(proxy_connection_t *c)
 {
+    /* RFC 1928 control lifetime is TCP EOF/explicit close. UDP idle belongs to
+     * its association, so a still-authenticated control can create a new one. */
+    if (c->state == PROXY_UDP)
+        return 0;
     uint64_t now = solaris_executor_now_ns(c->scope.owner);
     int active = (c->state == PROXY_STREAM || c->state == PROXY_UDP) && (!c->upgrade || c->upgrade_settled);
     uint64_t start = active ? c->activity_ns : c->created_ns;
@@ -85,6 +98,8 @@ static void reply_done(void *context, solaris_status_t status)
         solaris_proxy_cancel(c, status);
     else if (!c->scope.cancelled) {
         c->state = c->after_reply;
+        if (c->state == PROXY_UDP)
+            solaris_tracker_flow_open(c->flow);
         if (c->state == PROXY_ERROR)
             solaris_proxy_cancel(c, SOLARIS_EIO);
         else {
@@ -145,6 +160,8 @@ static void connection_timeout(proxy_connection_t *c)
             solaris_proxy_http_error(c, 504);
         else
             solaris_proxy_socks_reply(c, 6, NULL, PROXY_ERROR);
+        if (c->route_job)
+            solaris_route_cancel(c->route_job);
         if (c->relay)
             solaris_tcp_relay_close(c->relay);
     } else
@@ -153,7 +170,7 @@ static void connection_timeout(proxy_connection_t *c)
 static solaris_status_t wrapper_write(void *context, const solaris_slice_t *data, solaris_io_done_fn done, void *user)
 {
     proxy_connection_t *c = context;
-    if (c->scope.cancelled || !c->native)
+    if (c->scope.cancelled || !c->native || solaris_tracker_flow_closing(c->flow))
         return SOLARIS_ECLOSED;
     if (c->state != PROXY_STREAM || c->reply)
         return SOLARIS_EAGAIN;
@@ -176,7 +193,7 @@ static void wrapper_shutdown_done(void *context, solaris_status_t status)
 static solaris_status_t wrapper_shutdown(void *context, solaris_io_done_fn done, void *user)
 {
     proxy_connection_t *c = context;
-    if (c->scope.cancelled || !c->native)
+    if (c->scope.cancelled || !c->native || solaris_tracker_flow_closing(c->flow))
         return SOLARIS_ECLOSED;
     if (c->state != PROXY_STREAM || c->reply)
         return SOLARIS_EAGAIN;
@@ -198,7 +215,7 @@ static solaris_status_t wrapper_shutdown(void *context, solaris_io_done_fn done,
 static solaris_status_t wrapper_reading(void *context, int reading)
 {
     proxy_connection_t *c = context;
-    if (c->scope.cancelled)
+    if (c->scope.cancelled || solaris_tracker_flow_closing(c->flow))
         return SOLARIS_ECLOSED;
     c->reading = reading;
     if (!reading && c->native)
@@ -273,37 +290,155 @@ solaris_status_t solaris_proxy_select(proxy_connection_t *c, uint32_t network, c
                                          .network = network,
                                          .inbound_id = c->inbound->options.inbound_id,
                                          .connection_id = c->id,
-                                         .source = c->peer,
+                                         .source = network == SOLARIS_INBOUND_UDP ? c->udp_peer : c->peer,
                                          .destination = *destination,
                                          .username = c->username,
                                          .username_length = c->username_length};
-    solaris_status_t rc = c->inbound->options.select(c->inbound->options.context, c->scope.owner, &request, out);
+    if (!c->inbound->options.select)
+        return SOLARIS_ENOTSUP;
+    solaris_status_t rc = c->inbound->options.select(c->capture.context, c->scope.owner, &request, out);
     if (rc == SOLARIS_OK && c->scope.cancelled)
         rc = SOLARIS_ECLOSED;
     return rc;
 }
-void solaris_proxy_connect(proxy_connection_t *c)
+void solaris_proxy_route_options_release(solaris_route_options_t *options)
 {
-    c->state = PROXY_CONNECTING;
-    solaris_dial_plan_t plan = {0};
-    solaris_status_t rc = solaris_proxy_select(c, SOLARIS_INBOUND_TCP, &c->destination, &plan);
-    if (rc == SOLARIS_OK) {
-        solaris_tcp_relay_options_t options = {.owner = c->scope.owner,
-                                               .destination = c->destination,
-                                               .pending_byte_limit = c->inbound->options.pending_byte_limit,
-                                               .context = c,
-                                               .on_close = relay_closed,
-                                               .on_connect = relay_connected};
-        rc = solaris_tcp_relay_prepare(&options, &plan, &c->callbacks, &c->callback_context, &c->relay);
+    if (options->release)
+        options->release(options->context);
+    memset(options, 0, sizeof(*options));
+}
+solaris_status_t solaris_proxy_route_options(proxy_connection_t *c, uint32_t network,
+                                             const solaris_address_t *destination, solaris_route_options_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (c->scope.cancelled || !c->inbound->options.route)
+        return SOLARIS_ECLOSED;
+    solaris_inbound_request_t request = {.protocol = c->protocol,
+                                         .network = network,
+                                         .inbound_id = c->inbound->options.inbound_id,
+                                         .connection_id = c->id,
+                                         .source = network == SOLARIS_INBOUND_UDP ? c->udp_peer : c->peer,
+                                         .destination = *destination,
+                                         .username = c->username,
+                                         .username_length = c->username_length};
+    solaris_status_t rc = c->inbound->options.route(c->capture.context, c->scope.owner, &request, out);
+    if (rc != SOLARIS_OK)
+        return rc;
+    if (c->scope.cancelled) {
+        solaris_proxy_route_options_release(out);
+        return SOLARIS_ECLOSED;
     }
-    if (rc != SOLARIS_OK) {
-        (void)solaris_dial_plan_release(&plan);
-        relay_connected(c, rc);
-        return;
+    if ((out->retain == NULL) != (out->release == NULL)) {
+        solaris_proxy_route_options_release(out);
+        return SOLARIS_EINVAL;
     }
+    out->owner = c->scope.owner;
+    out->metadata.source = request.source;
+    out->metadata.destination = *destination;
+    memset(&out->metadata.resolved, 0, sizeof(out->metadata.resolved));
+    out->metadata.resolved_valid = 0;
+    out->metadata.network = network;
+    out->metadata.inbound_id = request.inbound_id;
+    out->metadata.connection_id = c->id;
+    uint64_t timeout = c->inbound->options.handshake_timeout_ms;
+    if (network == SOLARIS_INBOUND_TCP) {
+        uint64_t elapsed = solaris_executor_now_ns(c->scope.owner) - c->created_ns;
+        uint64_t duration = timeout * UINT64_C(1000000);
+        if (elapsed >= duration) {
+            solaris_proxy_route_options_release(out);
+            return SOLARIS_ETIMEDOUT;
+        }
+        timeout = (duration - elapsed - 1) / UINT64_C(1000000) + 1;
+    }
+    if (!out->timeout_ms || out->timeout_ms > timeout)
+        out->timeout_ms = timeout;
+    return SOLARIS_OK;
+}
+static solaris_status_t start_relay(proxy_connection_t *c, solaris_dial_plan_t *plan, const solaris_address_t *target,
+                                    const solaris_route_result_t *selected)
+{
+    if (c->flow) {
+        solaris_route_result_t fallback = {.metadata = {.source = c->peer,
+                                                        .destination = c->destination,
+                                                        .network = SOLARIS_NETWORK_TCP,
+                                                        .inbound_id = c->inbound->options.inbound_id,
+                                                        .config_revision = c->capture.config_revision,
+                                                        .selection_revision = c->capture.selection_revision},
+                                           .dial_target = *target,
+                                           .rule_index = UINT64_MAX};
+        solaris_dial_plan_t observed;
+        solaris_status_t rc = solaris_tracker_attach_plan(c->flow, plan, selected ? selected : &fallback, &observed);
+        if (rc != SOLARIS_OK)
+            return rc;
+        *plan = observed;
+    }
+    solaris_tcp_relay_options_t options = {.owner = c->scope.owner,
+                                           .destination = *target,
+                                           .pending_byte_limit = c->inbound->options.pending_byte_limit,
+                                           .context = c,
+                                           .on_close = relay_closed,
+                                           .on_connect = relay_connected};
+    solaris_status_t rc = solaris_tcp_relay_prepare(&options, plan, &c->callbacks, &c->callback_context, &c->relay);
+    if (rc != SOLARIS_OK)
+        return rc;
     c->wrapper = 1;
     solaris_scope_retain(&c->scope);
     solaris_proxy_schedule(c);
+    return SOLARIS_OK;
+}
+static void routed(void *context, solaris_status_t status, solaris_route_result_t *result)
+{
+    proxy_connection_t *c = context;
+    c->route_job = NULL;
+    if (!c->scope.cancelled && !c->draining) {
+        if (solaris_tracker_flow_closing(c->flow))
+            solaris_proxy_cancel(c, SOLARIS_ECANCELLED);
+        else if (expired(c))
+            connection_timeout(c);
+        else {
+            solaris_dial_plan_t plan = {0};
+            if (status == SOLARIS_OK)
+                status = solaris_route_result_take_plan(result, &plan);
+            if (status == SOLARIS_OK)
+                status = start_relay(c, &plan, &result->dial_target, result);
+            (void)solaris_dial_plan_release(&plan);
+            if (status != SOLARIS_OK)
+                relay_connected(c, status);
+        }
+    }
+    solaris_scope_release(&c->scope);
+}
+void solaris_proxy_connect(proxy_connection_t *c)
+{
+    if (solaris_tracker_flow_closing(c->flow)) {
+        solaris_proxy_cancel(c, SOLARIS_ECANCELLED);
+        return;
+    }
+    solaris_tracker_flow_target(c->flow, &c->destination);
+    c->state = PROXY_CONNECTING;
+    if (c->inbound->options.route) {
+        solaris_route_options_t options;
+        solaris_status_t rc = solaris_proxy_route_options(c, SOLARIS_INBOUND_TCP, &c->destination, &options);
+        if (rc == SOLARIS_OK) {
+            options.done = routed;
+            options.user = c;
+            solaris_scope_retain(&c->scope);
+            rc = solaris_route_start(&options, &c->route_job);
+            if (rc != SOLARIS_OK)
+                solaris_scope_release(&c->scope);
+            solaris_proxy_route_options_release(&options);
+        }
+        if (rc != SOLARIS_OK)
+            relay_connected(c, rc);
+        return;
+    }
+    solaris_dial_plan_t plan = {0};
+    solaris_status_t rc = solaris_proxy_select(c, SOLARIS_INBOUND_TCP, &c->destination, &plan);
+    if (rc == SOLARIS_OK)
+        rc = start_relay(c, &plan, &c->destination, NULL);
+    (void)solaris_dial_plan_release(&plan);
+    if (rc != SOLARIS_OK)
+        relay_connected(c, rc);
 }
 static void http_parse(proxy_connection_t *c)
 {
@@ -414,6 +549,8 @@ static void stream_input(proxy_connection_t *c)
 static void pump(void *context)
 {
     proxy_connection_t *c = context;
+    if (!c->scope.cancelled && solaris_tracker_flow_closing(c->flow))
+        solaris_proxy_cancel(c, SOLARIS_ECANCELLED);
     if (c->wrapper && !c->virtual_open) {
         c->virtual_open = 1;
         c->callbacks.on_open(c->callback_context, &c->stream, c->scope.cancelled ? SOLARIS_ECANCELLED : SOLARIS_OK);
@@ -474,6 +611,8 @@ static void native_opened(void *context, solaris_stream_t *stream, solaris_statu
 static void native_data(void *context, solaris_stream_t *stream, const solaris_buffer_t *buffer)
 {
     proxy_connection_t *c = context;
+    if (!c->scope.cancelled && solaris_tracker_flow_closing(c->flow))
+        solaris_proxy_cancel(c, SOLARIS_ECANCELLED);
     if (c->scope.cancelled)
         return;
     (void)solaris_stream_set_reading(stream, 0);
@@ -510,11 +649,21 @@ static void native_closed(void *context, solaris_stream_t *stream, solaris_statu
 }
 static const solaris_stream_callbacks_t native_callbacks = {native_opened, native_data, native_eof, native_writable,
                                                             native_closed};
-static solaris_status_t accepted(void *context, const solaris_address_t *peer, const solaris_address_t *local,
-                                 solaris_stream_t *stream, solaris_stream_callbacks_t *callbacks, void **stream_context)
+static void observed_close(void *context)
 {
-    solaris_proxy_inbound_t *in = context;
-    if (in->scope.cancelled)
+    solaris_proxy_cancel(context, SOLARIS_ECANCELLED);
+}
+solaris_status_t solaris_proxy_inbound_accept_with_context(solaris_proxy_inbound_t *in, const solaris_address_t *peer,
+                                                           const solaris_address_t *local, solaris_stream_t *stream,
+                                                           solaris_stream_callbacks_t *callbacks, void **stream_context,
+                                                           const solaris_proxy_context_t *capture)
+{
+    if (!in || !peer || !local || !stream || !callbacks || !stream_context ||
+        (capture && ((capture->retain == NULL) != (capture->release == NULL))))
+        return SOLARIS_EINVAL;
+    if (!solaris_executor_is_owner(in->scope.owner) || stream->owner != in->scope.owner)
+        return SOLARIS_ETHREAD;
+    if (in->scope.cancelled || in->stats.retired || !solaris_executor_accepting(in->scope.owner))
         return SOLARIS_ECLOSED;
     if (in->stats.connections >= in->options.connection_limit || in->serial == UINT64_MAX) {
         in->stats.rejected++;
@@ -527,6 +676,10 @@ static solaris_status_t accepted(void *context, const solaris_address_t *peer, c
     }
     memset(c, 0, sizeof(*c));
     c->inbound = in;
+    c->capture = capture ? *capture
+                         : (solaris_proxy_context_t){.context = in->options.context,
+                                                     .retain = in->options.retain,
+                                                     .release = in->options.release};
     c->input_capacity = in->options.header_limit + 8192;
     c->input = solaris_memory_allocate(solaris_executor_budget(in->scope.owner), c->input_capacity);
     if (!c->input) {
@@ -540,7 +693,6 @@ static solaris_status_t accepted(void *context, const solaris_address_t *peer, c
         solaris_memory_free(c);
         return rc;
     }
-    c->native = stream;
     c->peer = *peer;
     c->local = *local;
     c->protocol = in->options.protocol;
@@ -554,19 +706,58 @@ static solaris_status_t accepted(void *context, const solaris_address_t *peer, c
     c->next = in->connections;
     in->connections = c;
     in->stats.connections++;
-    in->stats.accepted++;
     solaris_scope_retain(&in->scope);
+    if (in->options.tracker) {
+        solaris_observe_options_t observe = {.kind = SOLARIS_FLOW_STREAM,
+                                             .purpose = SOLARIS_FLOW_USER,
+                                             .source = *peer,
+                                             .config_revision = c->capture.config_revision,
+                                             .selection_revision = c->capture.selection_revision,
+                                             .inbound_id = in->options.inbound_id,
+                                             .rule_index = UINT64_MAX,
+                                             .network = SOLARIS_NETWORK_TCP};
+        rc = solaris_tracker_admit(in->options.tracker, in->scope.owner, &observe, observed_close, c, &c->flow, &c->id);
+        if (rc != SOLARIS_OK) {
+            in->stats.rejected++;
+            solaris_proxy_cancel(c, rc);
+            return rc;
+        }
+    }
+    c->native = stream;
     solaris_scope_retain(&c->scope);
+    if (c->capture.retain) {
+        c->capture.retain(c->capture.context);
+        c->context_retained = 1;
+    }
+    in->stats.accepted++;
     *callbacks = native_callbacks;
     *stream_context = c;
     return SOLARIS_OK;
+}
+solaris_status_t solaris_proxy_inbound_accept(solaris_proxy_inbound_t *in, const solaris_address_t *peer,
+                                              const solaris_address_t *local, solaris_stream_t *stream,
+                                              solaris_stream_callbacks_t *callbacks, void **stream_context)
+{
+    return solaris_proxy_inbound_accept_with_context(in, peer, local, stream, callbacks, stream_context, NULL);
+}
+static solaris_status_t accepted(void *context, const solaris_address_t *peer, const solaris_address_t *local,
+                                 solaris_stream_t *stream, solaris_stream_callbacks_t *callbacks, void **stream_context)
+{
+    return solaris_proxy_inbound_accept(context, peer, local, stream, callbacks, stream_context);
+}
+static void maybe_retired(solaris_proxy_inbound_t *in)
+{
+    if (in->stats.retired && !in->connections && !in->listener && !in->scope.cancelled)
+        inbound_fail(in, SOLARIS_OK);
 }
 static void listener_closed(void *context, solaris_status_t status)
 {
     solaris_proxy_inbound_t *in = context;
     in->listener = NULL;
-    inbound_fail(in, status);
-    solaris_scope_release(&in->scope);
+    if (in->stats.retired && status == SOLARIS_OK)
+        maybe_retired(in);
+    else
+        inbound_fail(in, status);
 }
 static solaris_status_t start_timer(solaris_proxy_inbound_t *in);
 static void timer_fired(void *context, solaris_status_t status)
@@ -619,7 +810,10 @@ static void inbound_done(void *context)
     }
     if (in->accepted)
         in->options.on_close(in->options.context, &in->stats, in->status);
+    solaris_scope_t *parent = in->parent_retained ? in->options.parent_scope : NULL;
     solaris_memory_free(in);
+    if (parent)
+        solaris_scope_release(parent);
 }
 void solaris_proxy_inbound_options_init(solaris_proxy_inbound_options_t *o)
 {
@@ -635,20 +829,22 @@ void solaris_proxy_inbound_options_init(solaris_proxy_inbound_options_t *o)
     o->idle_timeout_ms = 300000;
     o->udp = 1;
 }
-solaris_status_t solaris_proxy_inbound_create(const solaris_proxy_inbound_options_t *o, solaris_proxy_inbound_t **out)
+static solaris_status_t create(const solaris_proxy_inbound_options_t *o, solaris_proxy_inbound_t **out, int detached)
 {
     if (!out)
         return SOLARIS_EINVAL;
     *out = NULL;
-    if (!o || !o->owner || !o->select || !o->on_close || o->protocol < SOLARIS_INBOUND_HTTP ||
-        o->protocol > SOLARIS_INBOUND_MIXED || !o->connection_limit || o->header_limit < 1024 ||
-        o->header_limit > 1048576 || o->pending_byte_limit < o->header_limit + 8192 || !o->pending_packet_limit ||
-        !o->udp_mapping_limit || !o->handshake_timeout_ms || !o->idle_timeout_ms ||
+    if (!o || !o->owner || (!o->select && !o->route) || !o->on_close || ((o->retain == NULL) != (o->release == NULL)) ||
+        o->protocol < SOLARIS_INBOUND_HTTP || o->protocol > SOLARIS_INBOUND_MIXED || !o->connection_limit ||
+        o->header_limit < 1024 || o->header_limit > 1048576 || o->pending_byte_limit < o->header_limit + 8192 ||
+        !o->pending_packet_limit || !o->udp_mapping_limit || !o->handshake_timeout_ms || !o->idle_timeout_ms ||
         o->handshake_timeout_ms > UINT64_MAX / 1000000 || o->idle_timeout_ms > UINT64_MAX / 1000000 ||
         (o->udp != 0 && o->udp != 1))
         return SOLARIS_EINVAL;
-    if (!solaris_executor_is_owner(o->owner))
+    if (!solaris_executor_is_owner(o->owner) || (o->parent_scope && o->parent_scope->owner != o->owner))
         return SOLARIS_ETHREAD;
+    if (o->parent_scope && (o->parent_scope->cancelled || o->parent_scope->finishing))
+        return SOLARIS_ECLOSED;
     solaris_proxy_inbound_t *in = solaris_memory_allocate(solaris_executor_budget(o->owner), sizeof(*in));
     if (!in)
         return SOLARIS_ENOMEM;
@@ -660,26 +856,54 @@ solaris_status_t solaris_proxy_inbound_create(const solaris_proxy_inbound_option
         solaris_memory_free(in);
         return rc;
     }
+    if (o->parent_scope) {
+        solaris_scope_retain(o->parent_scope);
+        in->parent_retained = 1;
+    }
     if (o->udp && o->protocol != SOLARIS_INBOUND_HTTP)
         rc = solaris_proxy_udp_create(in);
     if (rc == SOLARIS_OK)
         rc = start_timer(in);
-    if (rc == SOLARIS_OK) {
+    if (rc == SOLARIS_OK && !detached) {
         solaris_dialer_options_t stream;
         solaris_dialer_options_init(&stream);
         stream.pending_byte_limit = o->pending_byte_limit;
         stream.read_chunk_size = 8192;
-        rc = solaris_tcp_listener_open(o->owner, &o->listen, &stream, accepted, listener_closed, in, &in->listener,
-                                       &in->stats.bound);
-        if (rc == SOLARIS_OK)
-            solaris_scope_retain(&in->scope);
+        rc = solaris_tcp_listener_open_scoped(o->owner, &in->scope, &o->listen, &stream, accepted, listener_closed, in,
+                                              &in->listener, &in->stats.bound);
     }
     if (rc != SOLARIS_OK) {
         inbound_fail(in, rc);
         return rc;
     }
+    if (detached)
+        in->stats.bound = o->listen;
     in->accepted = 1;
     *out = in;
+    return SOLARIS_OK;
+}
+solaris_status_t solaris_proxy_inbound_create(const solaris_proxy_inbound_options_t *options,
+                                              solaris_proxy_inbound_t **out)
+{
+    return create(options, out, 0);
+}
+solaris_status_t solaris_proxy_inbound_detached_create(const solaris_proxy_inbound_options_t *options,
+                                                       solaris_proxy_inbound_t **out)
+{
+    return create(options, out, 1);
+}
+solaris_status_t solaris_proxy_inbound_retire(solaris_proxy_inbound_t *in)
+{
+    if (!in)
+        return SOLARIS_EINVAL;
+    if (!solaris_executor_is_owner(in->scope.owner))
+        return SOLARIS_ETHREAD;
+    if (in->scope.cancelled)
+        return SOLARIS_ECLOSED;
+    in->stats.retired = 1;
+    if (in->listener)
+        solaris_tcp_listener_close(in->listener);
+    maybe_retired(in);
     return SOLARIS_OK;
 }
 solaris_status_t solaris_proxy_inbound_snapshot(solaris_proxy_inbound_t *in, solaris_proxy_inbound_snapshot_t *out)

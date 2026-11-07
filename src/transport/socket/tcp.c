@@ -422,13 +422,17 @@ solaris_status_t solaris_dialer_open_stream(solaris_executor_t *executor,
 #include "transport/socket/tcp.h"
 struct solaris_tcp_listener {
     solaris_scope_t scope;
+    solaris_scope_t *parent;
     uv_tcp_t native;
+    /* Reject a single accepted connection without allocating another Solaris
+     * resource or revoking the listening endpoint under quota pressure. */
+    uv_tcp_t rejected;
     solaris_dialer_options_t options;
     solaris_tcp_accept_fn accept;
     void (*on_close)(void *, solaris_status_t);
     void *context;
     solaris_status_t status;
-    int initialized, accepted, close_requested;
+    int initialized, accepted, close_requested, rejecting, retry_accept;
 };
 static void listener_native_closed(uv_handle_t *native)
 { solaris_tcp_listener_t *listener = native->data; listener->initialized = 0; solaris_scope_release(&listener->scope); }
@@ -442,8 +446,10 @@ static void listener_cancelled(void *context)
 static void listener_destroyed(void *context)
 {
     solaris_tcp_listener_t *listener = context;
+    solaris_scope_t *parent = listener->parent;
     if (listener->accepted) listener->on_close(listener->context, listener->status);
     solaris_traffic_counter_release(listener->options.traffic); solaris_memory_free(listener);
+    if (parent) solaris_scope_release(parent);
 }
 static void listener_fail(solaris_tcp_listener_t *listener, solaris_status_t status)
 {
@@ -484,11 +490,39 @@ static solaris_status_t accept_stream(solaris_tcp_listener_t *listener)
     schedule_open(tcp, tcp->scope.cancelled ? SOLARIS_ECANCELLED : SOLARIS_OK);
     return SOLARIS_OK;
 }
+static void listener_connection(uv_stream_t *native, int status);
+static void rejected_closed(uv_handle_t *native)
+{
+    solaris_tcp_listener_t *listener = native->data;
+    listener->rejecting = 0;
+    if (listener->retry_accept && !listener->scope.cancelled) {
+        listener->retry_accept = 0;
+        listener_connection((uv_stream_t *)&listener->native, 0);
+    }
+    solaris_scope_release(&listener->scope);
+}
+static solaris_status_t reject_connection(solaris_tcp_listener_t *listener)
+{
+    if (listener->rejecting) {
+        listener->retry_accept = 1;
+        return SOLARIS_OK;
+    }
+    int rc = uv_tcp_init(solaris_executor_loop(listener->scope.owner), &listener->rejected);
+    if (rc != 0) return solaris_socket_status(rc);
+    listener->rejected.data = listener;
+    listener->rejecting = 1;
+    solaris_scope_retain(&listener->scope);
+    rc = uv_accept((uv_stream_t *)&listener->native, (uv_stream_t *)&listener->rejected);
+    uv_close((uv_handle_t *)&listener->rejected, rejected_closed);
+    return rc == 0 || rc == UV_EAGAIN ? SOLARIS_OK : solaris_socket_status(rc);
+}
 static void listener_connection(uv_stream_t *native, int status)
 {
     solaris_tcp_listener_t *listener = native->data;
     if (listener->scope.cancelled) return;
     solaris_status_t rc = status == 0 ? accept_stream(listener) : solaris_socket_status(status);
+    if (status == 0 && (rc == SOLARIS_ENOMEM || rc == SOLARIS_EBUSY || rc == SOLARIS_EAGAIN))
+        rc = reject_connection(listener);
     if (rc != SOLARIS_OK) listener_fail(listener, rc);
 }
 solaris_status_t solaris_tcp_listener_open(solaris_executor_t *owner,
@@ -496,11 +530,21 @@ solaris_status_t solaris_tcp_listener_open(solaris_executor_t *owner,
     solaris_tcp_accept_fn accept, void (*on_close)(void *, solaris_status_t),
     void *context, solaris_tcp_listener_t **out, solaris_address_t *bound)
 {
+    return solaris_tcp_listener_open_scoped(owner, NULL, bind, stream_options,
+        accept, on_close, context, out, bound);
+}
+solaris_status_t solaris_tcp_listener_open_scoped(solaris_executor_t *owner,
+    solaris_scope_t *parent, const solaris_address_t *bind,
+    const solaris_dialer_options_t *stream_options, solaris_tcp_accept_fn accept,
+    void (*on_close)(void *, solaris_status_t), void *context,
+    solaris_tcp_listener_t **out, solaris_address_t *bound)
+{
     if (out == NULL) return SOLARIS_EINVAL;
     *out = NULL;
     if (owner == NULL || bind == NULL || bound == NULL || accept == NULL || on_close == NULL ||
         (bind->family != SOLARIS_ADDRESS_IPV4 && bind->family != SOLARIS_ADDRESS_IPV6)) return SOLARIS_EINVAL;
     if (!solaris_executor_is_owner(owner)) return SOLARIS_ETHREAD;
+    if (parent && (parent->owner != owner || parent->cancelled || parent->finishing)) return SOLARIS_EINVAL;
     solaris_dialer_options_t options; solaris_status_t rc = solaris_socket_options(stream_options, &options);
     if (rc != SOLARIS_OK) return rc;
     struct sockaddr_storage local; rc = solaris_address_to_sockaddr(bind, &local);
@@ -511,6 +555,8 @@ solaris_status_t solaris_tcp_listener_open(solaris_executor_t *owner,
     listener->accept = accept; listener->on_close = on_close; listener->context = context;
     rc = solaris_scope_init(&listener->scope, owner, listener_cancelled, listener_destroyed, listener);
     if (rc != SOLARIS_OK) { solaris_memory_free(listener); return rc; }
+    listener->parent = parent;
+    if (parent) solaris_scope_retain(parent);
     solaris_traffic_counter_retain(listener->options.traffic);
     int uv_status = uv_tcp_init(solaris_executor_loop(owner), &listener->native);
     if (uv_status != 0) { rc = solaris_socket_status(uv_status); listener_fail(listener, rc); return rc; }

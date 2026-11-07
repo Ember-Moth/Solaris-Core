@@ -1,0 +1,15 @@
+mixed-port: 0
+socks-port: 0
+port: 0
+allow-lan: false
+bind-address: 127.0.0.1
+authentication: ["sample:synthetic"]
+listeners:
+  - name: local
+    type: mixed
+    listen: 127.0.0.1
+    port: 7890
+    udp: true
+  - name: decimal-port
+    type: http
+    port: '010'

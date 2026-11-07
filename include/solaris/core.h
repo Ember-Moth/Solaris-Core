@@ -2,6 +2,11 @@
 #define SOLARIS_CORE_H
 
 #include <solaris/engine.h>
+#include <solaris/config.h>
+#include <solaris/control.h>
+#include <solaris/observe.h>
+#include <solaris/probe.h>
+#include <solaris/log.h>
 #include <solaris/error.h>
 #include <solaris/version.h>
 

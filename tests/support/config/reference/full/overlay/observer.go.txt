@@ -1,0 +1,27 @@
+// Test-only observation. Does not change normalization, timers or scheduling.
+package util
+
+import (
+    "context"
+    "reflect"
+    "sync"
+    "time"
+)
+
+var solarisReferenceIntervals struct {
+    sync.Mutex
+    values map[uintptr]time.Duration
+}
+func solarisReferenceObserve(ctx context.Context, duration time.Duration) {
+    pointer := reflect.ValueOf(ctx).Pointer()
+    solarisReferenceIntervals.Lock()
+    defer solarisReferenceIntervals.Unlock()
+    if solarisReferenceIntervals.values == nil { solarisReferenceIntervals.values = make(map[uintptr]time.Duration) }
+    if len(solarisReferenceIntervals.values) < 1024 { solarisReferenceIntervals.values[pointer] = duration }
+}
+func SolarisReferenceInterval(pointer uintptr) (time.Duration, bool) {
+    solarisReferenceIntervals.Lock()
+    defer solarisReferenceIntervals.Unlock()
+    value, ok := solarisReferenceIntervals.values[pointer]
+    return value, ok
+}

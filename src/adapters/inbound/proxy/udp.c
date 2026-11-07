@@ -33,6 +33,7 @@ solaris_status_t solaris_proxy_udp_create(solaris_proxy_inbound_t *in)
     solaris_udp_dispatcher_options_t options = {.workers = &owner,
                                                 .worker_count = 1,
                                                 .budget = solaris_executor_budget(owner),
+                                                .tracker = in->options.tracker,
                                                 .association_limit = in->options.connection_limit,
                                                 .mapping_limit = in->options.udp_mapping_limit,
                                                 .pending_packet_limit = in->options.pending_packet_limit,
@@ -128,10 +129,28 @@ static void packet_received(void *context, solaris_datagram_t *datagram, const s
     solaris_udp_reply_endpoint_t endpoint = {
         .context = c, .generation = c->id, .retain = retain, .release = release, .send = reply};
     solaris_slice_t slice = {buffer, used + 3, size - used - 3};
-    solaris_status_t rc =
-        solaris_udp_submit(c->inbound->udp, &c->udp_key, &destination, &slice, &endpoint, sent, c, &c->association_id);
+    solaris_status_t rc;
+    uint64_t association_id = 0;
+    if (c->inbound->options.route) {
+        solaris_route_options_t route = {0};
+        if (!c->associated) {
+            rc = solaris_proxy_route_options(c, SOLARIS_INBOUND_UDP, &destination, &route);
+            if (rc != SOLARIS_OK) {
+                c->inbound->stats.udp_dropped++;
+                if (rc == SOLARIS_EACCESS || rc == SOLARIS_ECLOSED)
+                    solaris_proxy_cancel(c, rc);
+                return;
+            }
+        }
+        rc = solaris_udp_submit_routed(c->inbound->udp, &c->udp_key, &destination, &slice, &endpoint, sent, c,
+                                       &association_id, c->associated ? NULL : &route);
+        solaris_proxy_route_options_release(&route);
+    } else
+        rc =
+            solaris_udp_submit(c->inbound->udp, &c->udp_key, &destination, &slice, &endpoint, sent, c, &association_id);
     if (rc == SOLARIS_OK) {
         c->associated = 1;
+        c->association_id = association_id;
         solaris_scope_retain(&c->scope);
     } else
         c->inbound->stats.udp_dropped++;

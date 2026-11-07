@@ -7,7 +7,7 @@ static uint32_t capabilities(void *state)
 {
     return ((solaris_direct_outbound_t *)state)->retired ? 0u :
         SOLARIS_OUTBOUND_STREAM | SOLARIS_OUTBOUND_DATAGRAM | SOLARIS_OUTBOUND_STREAM_DOMAIN |
-        SOLARIS_OUTBOUND_DATAGRAM_MULTI | SOLARIS_OUTBOUND_HALF_CLOSE;
+        SOLARIS_OUTBOUND_DATAGRAM_MULTI | SOLARIS_OUTBOUND_HALF_CLOSE | SOLARIS_OUTBOUND_LOCAL_RESOLUTION;
 }
 
 static solaris_status_t stream(void *state, const solaris_address_t *destination,
@@ -75,7 +75,7 @@ static solaris_status_t create_instance(const void *config, const solaris_module
 const solaris_outbound_module_t solaris_direct_module = {
     .name = "direct",
     .capabilities = SOLARIS_OUTBOUND_STREAM | SOLARIS_OUTBOUND_DATAGRAM | SOLARIS_OUTBOUND_STREAM_DOMAIN |
-                    SOLARIS_OUTBOUND_DATAGRAM_MULTI | SOLARIS_OUTBOUND_HALF_CLOSE,
+                    SOLARIS_OUTBOUND_DATAGRAM_MULTI | SOLARIS_OUTBOUND_HALF_CLOSE | SOLARIS_OUTBOUND_LOCAL_RESOLUTION,
     .compile = compile_config, .free_config = solaris_memory_free,
     .create = create_instance, .retire = retire, .destroy = solaris_memory_free
 };

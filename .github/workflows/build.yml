@@ -27,6 +27,14 @@ jobs:
         run: cmake --build build --config Debug --parallel
       - name: Verify SDK and lifecycle
         run: ctest --test-dir build --build-config Debug --output-on-failure
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: sdk-evidence-${{ matrix.os }}-shared-${{ matrix.shared }}
+          path: |
+            build/config-full-differential.json
+            build/reference-tools/mihomo-full-reference*-evidence.json
+            build/Testing/Temporary/LastTest.log
 
   sanitizers:
     runs-on: ubuntu-latest
@@ -82,7 +90,7 @@ jobs:
           "-DCMAKE_CXX_FLAGS=-fsanitize=fuzzer-no-link,address,undefined"
       - name: Build fuzzer and independent fixture tools
         run: >-
-          cmake --build build-fuzz --parallel --target solaris_parser_fuzz
+          cmake --build build-fuzz --parallel --target solaris_parser_fuzz solaris_config_fuzz
           solaris_vless_encryption_tests solaris_ss_control_peer solaris_encryption_control_peer
           solaris_tls_profiles_tests solaris_tls_profiles_peer
       - name: Generate protocol corpus
@@ -96,6 +104,10 @@ jobs:
         run: |
           mkdir -p build-fuzz/corpus build-fuzz/artifacts
           build-fuzz/solaris_parser_fuzz build-fuzz/corpus build-fuzz/seeds -dict=tests/fuzz/protocols.dict -max_total_time=60 -max_len=196608 -timeout=5 -rss_limit_mb=2048 -print_final_stats=1 -artifact_prefix=build-fuzz/artifacts/ 2>&1 | tee build-fuzz/fuzz.log
+      - name: Exercise YAML compiler with ASan and UBSan
+        run: |
+          mkdir -p build-fuzz/config-corpus build-fuzz/config-artifacts
+          build-fuzz/solaris_config_fuzz build-fuzz/config-corpus tests/fuzz/config-seeds -dict=tests/fuzz/config.dict -max_total_time=60 -max_len=65536 -timeout=5 -rss_limit_mb=1024 -print_final_stats=1 -artifact_prefix=build-fuzz/config-artifacts/ 2>&1 | tee build-fuzz/config-fuzz.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -103,3 +115,5 @@ jobs:
           path: |
             build-fuzz/fuzz.log
             build-fuzz/artifacts/
+            build-fuzz/config-fuzz.log
+            build-fuzz/config-artifacts/

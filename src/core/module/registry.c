@@ -24,6 +24,7 @@ struct solaris_module_instance {
     void (*on_close)(void *);
     void *context;
     size_t leases;
+    solaris_scope_t *parent_scope;
 };
 
 static int valid_name(const char *name)
@@ -173,7 +174,9 @@ static void destroy_instance(void *context)
     if (instance->on_close != NULL) instance->on_close(instance->context);
     if (instance->state != NULL) instance->config->module->destroy(instance->state);
     solaris_module_config_release(instance->config);
+    solaris_scope_t *parent = instance->parent_scope;
     solaris_memory_free(instance);
+    if (parent != NULL) solaris_scope_release(parent);
 }
 solaris_status_t solaris_module_create(solaris_module_config_t *config,
                                         const solaris_module_services_t *services,
@@ -185,12 +188,20 @@ solaris_status_t solaris_module_create(solaris_module_config_t *config,
     if (config == NULL || services == NULL || services->owner == NULL)
         return solaris_error_set(error, SOLARIS_EINVAL, 0, "invalid module services");
     if (!solaris_executor_is_owner(services->owner)) return solaris_error_set(error, SOLARIS_ETHREAD, 0, NULL);
+    if (services->parent_scope != NULL) {
+        if (services->parent_scope->owner != services->owner)
+            return solaris_error_set(error, SOLARIS_ETHREAD, 0, "module parent scope has a different owner");
+        if (services->parent_scope->cancelled || services->parent_scope->finishing)
+            return solaris_error_set(error, SOLARIS_ECLOSED, 0, "module parent scope is closing");
+    }
     solaris_module_instance_t *instance = solaris_memory_allocate(solaris_executor_budget(services->owner), sizeof(*instance));
     if (instance == NULL) return solaris_error_set(error, SOLARIS_ENOMEM, 0, NULL);
     memset(instance, 0, sizeof(*instance));
     solaris_status_t rc = solaris_scope_init(&instance->scope, services->owner, retire_instance, destroy_instance, instance);
     if (rc != SOLARIS_OK) { solaris_memory_free(instance); return solaris_error_set(error, rc, 0, NULL); }
     instance->config = config;
+    instance->parent_scope = services->parent_scope;
+    if (instance->parent_scope != NULL) solaris_scope_retain(instance->parent_scope);
     solaris_module_config_retain(config);
     solaris_module_services_t injected = *services;
     injected.scope = &instance->scope;

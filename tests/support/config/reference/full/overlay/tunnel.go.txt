@@ -1,0 +1,6 @@
+// Test-only bridge: execute the real ordered matcher with controlled resolution.
+package tunnel
+import C "github.com/metacubex/mihomo/constant"
+func SolarisReferenceMatch(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, error) {
+    return match(metadata, helper)
+}

@@ -481,6 +481,16 @@ solaris_status_t solaris_executor_begin_quiesce(solaris_executor_t *executor)
     return SOLARIS_OK;
 }
 
+int solaris_executor_is_quiescent(solaris_executor_t *executor)
+{
+    if (executor == NULL) return 0;
+    uv_mutex_lock(&executor->mutex);
+    const int quiet = !executor->accepting && !executor->draining && executor->resources == 0u &&
+        executor->count == 0u && executor->executing == 0u && executor->deferred_head == NULL;
+    uv_mutex_unlock(&executor->mutex);
+    return quiet;
+}
+
 solaris_status_t solaris_executor_wait_quiescent(solaris_executor_t *executor)
 {
     if (executor == NULL) return SOLARIS_EINVAL;

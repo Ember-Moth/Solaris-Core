@@ -1,0 +1,31 @@
+proxies:
+  - name: ss
+    type: ss
+    server: localhost
+    port: 443
+    cipher: aes-128-gcm
+    password: synthetic
+    udp: true
+    udp-over-tcp: true
+    udp-over-tcp-version: 2
+  - name: vless
+    type: vless
+    server: localhost
+    port: 443
+    uuid: 00112233-4455-6677-8899-aabbccddeeff
+    encryption: none
+    tls: true
+    servername: localhost
+    udp: true
+    packet-encoding: xudp
+  - name: anytls
+    type: anytls
+    server: localhost
+    port: 443
+    password: synthetic
+    sni: localhost
+    udp: true
+    idle-session-timeout: 0
+    idle-session-check-interval: 0
+    min-idle-session: 0
+rules: ["MATCH,DIRECT"]

@@ -64,6 +64,17 @@ func verify(c *encryption.CommonConn) {
 	}
 }
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "probe-short" {
+		supported, err := probeShort()
+		if err != nil {
+			if !supported {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(64)
+			}
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "probe" {
 		must(probe())
 		return

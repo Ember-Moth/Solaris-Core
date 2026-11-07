@@ -228,12 +228,20 @@ static void start(void *context, solaris_status_t status)
 static void cancel(void *context, solaris_status_t status)
 { environment_t *e = context; CHECK(status == SOLARIS_OK && solaris_stream_close(e->channels[0].stream) == SOLARIS_OK); solaris_test_event_signal(&e->cancelled); }
 static void idle_next(void *context, solaris_status_t status)
-{ CHECK(status == SOLARIS_OK); open_next(context, 1u); }
+{
+    environment_t *e = context; CHECK(status == SOLARIS_OK && solaris_executor_is_owner(e->owner));
+    atomic_store(&e->clock, UINT64_C(21000000)); open_next(e, 1u);
+}
 static void clock_changed(void *context, solaris_status_t status)
 {
-    environment_t *e = context; CHECK(status == SOLARIS_OK);
+    environment_t *e = context; CHECK(status == SOLARIS_OK && solaris_executor_is_owner(e->owner));
+    /* Advance time on the owner: a timer must not destroy the carrier between
+     * the clock change and this mock's late ACK callback. The session pump
+     * still observes an expired ACK deadline when it processes the reply. */
+    atomic_store(&e->clock, UINT64_C(21000000));
     if (e->mode == ACK_LATE) {
         mock_t *m = &e->mocks[0]; uint8_t wire[3] = {4u, 2u, 0u}; solaris_buffer_t *buffer;
+        CHECK(m->opening && !m->closing);
         CHECK(solaris_buffer_copy(e->budget, wire, sizeof(wire), &buffer) == SOLARIS_OK);
         m->callbacks.on_data(m->context, &m->stream, buffer); solaris_buffer_release(buffer);
     }
@@ -262,15 +270,15 @@ static void run(int mode, int failure)
         CHECK(atomic_load(&e.closed) == 0u);
         queue(&e, &e.release, mock_written, &e.mocks[0]);
     } else if (mode == IDLE || mode == PERIODIC) {
-        solaris_test_event_wait(&e.idle_ready); atomic_store(&e.clock, UINT64_C(21000000));
+        solaris_test_event_wait(&e.idle_ready);
         CHECK(solaris_executor_post(e.owner, idle_next, &e) == SOLARIS_OK);
     } else if (mode == MIN_IDLE || mode == MIN_IDLE_STOP) {
-        solaris_test_event_wait(&e.idle_ready); atomic_store(&e.clock, UINT64_C(21000000));
+        solaris_test_event_wait(&e.idle_ready);
         CHECK(solaris_executor_post(e.owner, clock_changed, &e) == SOLARIS_OK); solaris_test_event_wait(&e.cancelled);
         if (mode == MIN_IDLE) CHECK(solaris_executor_post(e.owner, reuse_retained, &e) == SOLARIS_OK);
         else CHECK(solaris_executor_begin_quiesce(e.owner) == SOLARIS_OK);
     } else if (mode == ACK_TIMEOUT || mode == ACK_LATE) {
-        solaris_test_event_wait(&e.pending); atomic_store(&e.clock, UINT64_C(21000000));
+        solaris_test_event_wait(&e.pending);
         CHECK(solaris_executor_post(e.owner, clock_changed, &e) == SOLARIS_OK);
     }
     solaris_test_event_wait(&e.complete);

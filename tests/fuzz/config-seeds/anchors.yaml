@@ -1,0 +1,13 @@
+proxy-template: &base
+  type: socks5
+  server: 127.0.0.1
+  port: 1080
+  udp: true
+proxies:
+  - <<: *base
+    name: local
+proxy-groups:
+  - name: chosen
+    type: select
+    proxies: [local, DIRECT]
+rules: ["MATCH,chosen"]

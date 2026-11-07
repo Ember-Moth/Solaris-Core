@@ -34,8 +34,8 @@ The prior implementation also used BoringSSL (ISC-style and other permissive
 licenses), lwIP (BSD-3-Clause), PCRE2 (BSD-3-Clause), nghttp2 (MIT), and llhttp
 (MIT). These sources remain attributable through implementation baseline
 `f9ca89ac3cf13808463beac9b4130d6639ffb1c7`; future modules must carry forward
-the applicable notices when reusing them. Parser selections for subsequent
-stages are recorded in the dependency lock but are not currently linked.
+the applicable notices when reusing them. Additional parser selections for
+subsequent stages are recorded in the dependency lock.
 
 ## hev-socks5-tunnel
 
@@ -101,5 +101,34 @@ Enabling `SOLARIS_ENABLE_PROXY_INBOUND` links llhttp 9.4.3, commit
 The archive checksum is locked in `dependencies/lock.json`. All generated C
 identifiers are privately prefixed; upstream sources are fetched without edits.
 The upstream `LICENSE-MIT` is installed in `share/Solaris/licenses/llhttp/`.
+The build verifies the pinned header hash and removes its unconditional Windows
+`dllexport` annotation from a private build copy, so parser symbols do not enter
+the Solaris DLL ABI. Parser behavior and the downloaded upstream sources are unchanged.
 
 https://github.com/nodejs/llhttp
+
+## libyaml YAML parser
+
+The offline configuration compiler links libyaml 0.2.5, commit
+`2c891fc7a770e8ba2fec34fc6b545c672beb37e6`, under its MIT license.
+The archive checksum is locked in `dependencies/lock.json`. Solaris uses
+private symbol prefixes and a per-compilation bounded allocator through
+forced include headers; upstream sources are fetched without edits.
+The upstream `License` is installed in `share/Solaris/licenses/libyaml/`.
+
+https://github.com/yaml/libyaml
+
+The independent decoder fixtures in `tests/support/config/reference/` pin
+`go.yaml.in/yaml/v3 v3.0.5`, the YAML dependency of the fixed mihomo reference.
+Its upstream source uses MIT and Apache licenses; the module checksums remain
+in `go.sum`. This helper is test-only and is not linked into or installed with
+the Solaris SDK.
+
+The full configuration oracle in `tests/support/config/reference/full/` uses
+the GPLv3-licensed fixed mihomo revision recorded in `dependencies/lock.json`.
+Its module checksums and original source hashes are verified before making a
+private build copy. Test bridges expose existing address/metadata/rule helpers
+and observe the effective AnyTLS timer argument without changing loader or
+matching behavior. The build emits hashes for these bridges and the resulting
+observation overlay. This reference executable is not linked into or installed
+with the Solaris SDK.

@@ -48,6 +48,8 @@ solaris_status_t solaris_executor_create(const solaris_executor_options_t *optio
 solaris_status_t solaris_executor_activate(solaris_executor_t *executor, uint64_t generation);
 solaris_status_t solaris_executor_begin_quiesce(solaris_executor_t *executor);
 solaris_status_t solaris_executor_wait_quiescent(solaris_executor_t *executor);
+/* Thread-safe, nonblocking observation for a control-loop drain barrier. */
+int solaris_executor_is_quiescent(solaris_executor_t *executor);
 solaris_status_t solaris_executor_quiesce(solaris_executor_t *executor);
 solaris_status_t solaris_executor_destroy(solaris_executor_t *executor);
 solaris_status_t solaris_executor_post(solaris_executor_t *executor, solaris_task_fn task, void *context);

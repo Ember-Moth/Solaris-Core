@@ -21,7 +21,13 @@ enum {
 typedef uint32_t solaris_operation_t;
 enum {
     SOLARIS_OPERATION_START = 1,
-    SOLARIS_OPERATION_STOP = 2
+    SOLARIS_OPERATION_STOP = 2,
+    SOLARIS_OPERATION_CONFIG_PREPARE = 3,
+    SOLARIS_OPERATION_CONFIG_APPLY = 4,
+    SOLARIS_OPERATION_SET_MODE = 5,
+    SOLARIS_OPERATION_SELECT = 6,
+    SOLARIS_OPERATION_CLOSE_CONNECTIONS = 7,
+    SOLARIS_OPERATION_PROBE = 8
 };
 
 #define SOLARIS_TIMEOUT_INFINITE UINT64_MAX
@@ -35,7 +41,9 @@ enum {
 typedef struct solaris_engine_options {
     /* Zero uses one worker. Valid explicit range: 1..SOLARIS_MAX_IO_WORKERS. */
     uint32_t io_workers;
-    /* Pending commands, excluding a callback currently executing. */
+    /* Pending commands, excluding a callback currently executing. A separate
+     * fixed window of capacity+1 also bounds unfinished operations and retained
+     * out-of-order results; that window can be full while this queue is empty. */
     uint32_t command_capacity;
     /* Zero uses defaults; queue/resource limits are per worker. */
     uint32_t io_queue_capacity;
@@ -50,6 +58,9 @@ typedef struct solaris_event {
     solaris_operation_t operation;
     solaris_status_t status;
     solaris_engine_state_t state;
+    /* Applied configuration revision for config/mode/selection publication;
+     * zero for operations that did not publish a configuration/control view. */
+    uint64_t config_revision;
 } solaris_event_t;
 
 /*
@@ -110,6 +121,12 @@ SOLARIS_API solaris_status_t solaris_engine_start(
     solaris_engine_t *engine, uint64_t *operation_id, solaris_error_t *error);
 SOLARIS_API solaris_status_t solaris_engine_stop(
     solaris_engine_t *engine, uint64_t *operation_id, solaris_error_t *error);
+
+/* Thread-safe request to cancel a still-live non-lifecycle operation. Success
+ * requests cancellation, not rollback; its original operation still completes
+ * once, with the applied revision if publication already happened. */
+SOLARIS_API solaris_status_t solaris_engine_cancel(solaris_engine_t *engine,
+    uint64_t operation_id, solaris_error_t *error);
 
 /* Copies a pointer-free snapshot under the engine lock. */
 SOLARIS_API solaris_status_t solaris_engine_get_snapshot(

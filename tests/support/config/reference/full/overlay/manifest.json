@@ -1,0 +1,17 @@
+{
+  "repository": "https://github.com/Herta-Network/mihomo",
+  "revision": "9f121787bb563fe655d2789cbf6dbcc7ae19a0c9",
+  "version": "v1.19.34-0.20261031193628-9f121787bb56",
+  "sum": "h1:UTYefm+cFULHC/vjX9ChOI6vHuFWZxCa0jXuKJIYkMM=",
+  "go_mod_sum": "h1:nQQ8sJJj9lFo1JY6bCgeeAZfoS+15CuuXr92n2jMYkw=",
+  "sources": {
+    "config/config.go": "14d577a607eb5fff79513057bc16052520b62731d9af9817481f3baf980e8653",
+    "listener/listener.go": "1a11cda3fb4a87875d817fe29f1e79973cb8cb6eeccc0ae5e22db15df1277758",
+    "tunnel/tunnel.go": "884589634094a6d96dfea448c66f83f60582dc2c8b0e2884c89f7d9e1dd99afc",
+    "transport/anytls/util/routine.go": "a4a6408ca48c0a6ba3db72909b67f771213e7a7debeacefc8878c9b67b095777",
+    "transport/anytls/session/client.go": "36a5762bcd3359c7795afca06a777126d0bc5decde3f686f1ee62be404ed1b31",
+    "adapter/inbound/util.go": "8ec3e3a9b0cdbc2ad0175f94f2674584e99a35171b64adb95012d8d5478021c2",
+    "transport/socks5/socks5.go": "d1a79ea49d3567e4cd3d42477cb3984b1fee38fd3ccea6f5b435c70701e104fd"
+  },
+  "purpose": "Call the unmodified full configuration loader and actual ordered rule matcher; observe only the effective AnyTLS timer argument. Never call ApplyConfig or listener Listen."
+}

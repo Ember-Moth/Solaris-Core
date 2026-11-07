@@ -451,6 +451,21 @@ def curl_interop(h, origin):
 
 
 def allocation_edges(h, tcp, udp):
+    # A rejected native accept must not tear down the reusable endpoint. Keep
+    # allocation disabled across several arrivals to exercise the embedded
+    # rejection socket while its previous close callback is still pending.
+    for allocation in [0, 1, 2]:
+        h.start()
+        h.command('M', struct.pack('!i', allocation))
+        rejected = [h.connect() for _ in range(8)]
+        for conn in rejected:
+            with conn:
+                no_data(conn)
+        h.command('M', struct.pack('!i', -1))
+        with socks(h, tcp)[0] as conn:
+            conn.sendall(b'listener-survived')
+            assert exact(conn, 17) == b'listener-survived'
+        h.stop()
     # Arm failures after accept, so handshake/parser/relay allocations are covered.
     for protocol in [1, 2]:
         for allocation in range(24):

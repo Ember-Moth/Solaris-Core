@@ -3,7 +3,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/dependencies/lock.json")
 file(READ "${PROJECT_SOURCE_DIR}/dependencies/lock.json" solaris_dependency_lock)
 foreach(dependency IN LISTS SOLARIS_DEPENDENCIES)
-    if(NOT dependency MATCHES "^(libuv|boringssl|blake3|lwip|llhttp)$")
+    if(NOT dependency MATCHES "^(libuv|boringssl|blake3|lwip|llhttp|libyaml)$")
         message(FATAL_ERROR "No build recipe for declared dependency: ${dependency}")
     endif()
 endforeach()
@@ -38,6 +38,43 @@ endif()
 
 set(SOLARIS_PRIVATE_LIBRARIES uv_a)
 set(SOLARIS_PACKAGE_NEEDS_THREADS OFF)
+if("libyaml" IN_LIST SOLARIS_DEPENDENCIES)
+    string(JSON solaris_yaml_url GET "${solaris_dependency_lock}" libyaml url)
+    string(JSON solaris_yaml_hash GET "${solaris_dependency_lock}" libyaml sha256)
+    FetchContent_Declare(solaris_yaml URL "${solaris_yaml_url}"
+        URL_HASH "SHA256=${solaris_yaml_hash}" DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        SOURCE_SUBDIR solaris-populate-only)
+    FetchContent_MakeAvailable(solaris_yaml)
+    function(solaris_add_yaml_library target)
+        set(sources)
+        foreach(source api dumper emitter loader parser reader scanner writer)
+            list(APPEND sources "${solaris_yaml_SOURCE_DIR}/src/${source}.c")
+        endforeach()
+        add_library(${target} STATIC ${sources})
+        set_target_properties(${target} PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
+            POSITION_INDEPENDENT_CODE ON C_VISIBILITY_PRESET hidden EXPORT_NAME private_yaml)
+        target_include_directories(${target} PUBLIC
+            "$<BUILD_INTERFACE:${solaris_yaml_SOURCE_DIR}/include>"
+            "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third_party/libyaml>")
+        target_compile_definitions(${target} PRIVATE YAML_VERSION_MAJOR=0 YAML_VERSION_MINOR=2
+            YAML_VERSION_PATCH=5 YAML_VERSION_STRING="0.2.5"
+            PUBLIC "$<BUILD_INTERFACE:YAML_DECLARE_STATIC>")
+        foreach(header solaris_yaml_symbols.h solaris_yaml_allocator.h)
+            if(MSVC)
+                target_compile_options(${target} PRIVATE "/FI${PROJECT_SOURCE_DIR}/third_party/libyaml/${header}")
+            else()
+                target_compile_options(${target} PRIVATE "SHELL:-include \"${PROJECT_SOURCE_DIR}/third_party/libyaml/${header}\"")
+            endif()
+        endforeach()
+        if(SOLARIS_SANITIZER STREQUAL "address")
+            target_compile_options(${target} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        elseif(SOLARIS_SANITIZER STREQUAL "thread")
+            target_compile_options(${target} PRIVATE -fsanitize=thread -fno-omit-frame-pointer)
+        endif()
+    endfunction()
+    solaris_add_yaml_library(solaris_yaml)
+    list(APPEND SOLARIS_PRIVATE_LIBRARIES solaris_yaml)
+endif()
 if("llhttp" IN_LIST SOLARIS_DEPENDENCIES)
     string(JSON solaris_llhttp_url GET "${solaris_dependency_lock}" llhttp url)
     string(JSON solaris_llhttp_hash GET "${solaris_dependency_lock}" llhttp sha256)
@@ -45,13 +82,30 @@ if("llhttp" IN_LIST SOLARIS_DEPENDENCIES)
         URL_HASH "SHA256=${solaris_llhttp_hash}" DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR solaris-populate-only)
     FetchContent_MakeAvailable(solaris_llhttp)
+    # llhttp 9.4.3 unconditionally marks its Windows API dllexport, even when
+    # linked from a private static archive. Remove only that annotation in a
+    # checked build copy so the Solaris DLL's explicit export list stays exact.
+    string(JSON solaris_llhttp_header_hash GET "${solaris_dependency_lock}" llhttp header_sha256)
+    file(SHA256 "${solaris_llhttp_SOURCE_DIR}/include/llhttp.h" solaris_llhttp_actual_header_hash)
+    if(NOT solaris_llhttp_actual_header_hash STREQUAL solaris_llhttp_header_hash)
+        message(FATAL_ERROR "Pinned llhttp header changed before private export adaptation")
+    endif()
+    file(READ "${solaris_llhttp_SOURCE_DIR}/include/llhttp.h" solaris_llhttp_header)
+    string(REPLACE "#define LLHTTP_EXPORT __declspec(dllexport)" "#define LLHTTP_EXPORT"
+        solaris_llhttp_private_header "${solaris_llhttp_header}")
+    if(solaris_llhttp_private_header STREQUAL solaris_llhttp_header)
+        message(FATAL_ERROR "Pinned llhttp Windows export annotation was not found")
+    endif()
+    set(solaris_llhttp_include_dir "${PROJECT_BINARY_DIR}/private/llhttp/include")
+    file(MAKE_DIRECTORY "${solaris_llhttp_include_dir}")
+    file(WRITE "${solaris_llhttp_include_dir}/llhttp.h" "${solaris_llhttp_private_header}")
     add_library(solaris_llhttp STATIC "${solaris_llhttp_SOURCE_DIR}/src/llhttp.c"
         "${solaris_llhttp_SOURCE_DIR}/src/api.c" "${solaris_llhttp_SOURCE_DIR}/src/http.c")
     set_target_properties(solaris_llhttp PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
         POSITION_INDEPENDENT_CODE ON C_VISIBILITY_PRESET hidden EXPORT_NAME private_llhttp)
     target_include_directories(solaris_llhttp PUBLIC
         "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third_party/llhttp>"
-        "$<BUILD_INTERFACE:${solaris_llhttp_SOURCE_DIR}/include>")
+        "$<BUILD_INTERFACE:${solaris_llhttp_include_dir}>")
     if(MSVC)
         target_compile_options(solaris_llhttp PRIVATE "/FI${PROJECT_SOURCE_DIR}/third_party/llhttp/solaris_llhttp_symbols.h")
     else()

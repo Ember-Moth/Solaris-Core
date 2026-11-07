@@ -4,10 +4,10 @@
 #include <stdatomic.h>
 #include <uv.h>
 
-#define SOLARIS_TRACKER_COUNTERS(X) \
-    X(created) X(opened) X(closed) X(active) X(open_failures) \
-    X(bytes_read) X(bytes_written) X(packets_read) X(packets_written) \
-    X(accepted_writes) X(write_failures) X(rejections)
+#define SOLARIS_TRACKER_COUNTERS(X)                                                                                    \
+    X(created)                                                                                                         \
+    X(opened) X(closed) X(active) X(open_failures) X(bytes_read) X(bytes_written) X(packets_read) X(packets_written)   \
+        X(accepted_writes) X(write_failures) X(rejections)
 typedef struct solaris_tracker_atomic_totals {
 #define COUNTER(name) atomic_uint_fast64_t name;
     SOLARIS_TRACKER_COUNTERS(COUNTER)
@@ -18,6 +18,7 @@ typedef struct solaris_tracker_worker {
     solaris_tracker_atomic_totals_t totals[SOLARIS_FLOW_PURPOSE_COUNT];
 } solaris_tracker_worker_t;
 typedef struct solaris_observed_plan solaris_observed_plan_t;
+typedef struct solaris_close_link solaris_close_link_t;
 typedef struct solaris_tracked_channel {
     struct solaris_tracked_channel *next, *previous;
     solaris_observed_plan_t *plan;
@@ -49,7 +50,11 @@ struct solaris_observed_plan {
     solaris_tracked_channel_t *channels;
     size_t channel_count, channel_limit;
     atomic_int close_requested;
+    void (*close_flow)(void *context);
+    void *close_context;
+    solaris_close_link_t *waiters;
     int retired, released, registered, reference, close_pending, opened_once, stream_attempted;
+    int attached, finished, auto_finish, finalizing, caller_reference, close_called;
 };
 
 void solaris_track_link(solaris_observed_plan_t *plan, solaris_tracked_channel_t *channel);
@@ -61,8 +66,10 @@ void solaris_track_submit(solaris_observed_plan_t *plan, size_t bytes, const sol
 void solaris_track_written(solaris_observed_plan_t *plan, size_t bytes, int datagram, solaris_status_t status);
 void solaris_track_read(solaris_observed_plan_t *plan, size_t bytes, const solaris_address_t *peer);
 solaris_status_t solaris_tracked_stream_open(solaris_observed_plan_t *plan, const solaris_address_t *target,
-    const solaris_stream_callbacks_t *callbacks, void *context, solaris_stream_t **out);
+                                             const solaris_stream_callbacks_t *callbacks, void *context,
+                                             solaris_stream_t **out);
 solaris_status_t solaris_tracked_datagram_open(solaris_observed_plan_t *plan, uint32_t family,
-    const solaris_datagram_callbacks_t *callbacks, void *context, solaris_datagram_t **out);
+                                               const solaris_datagram_callbacks_t *callbacks, void *context,
+                                               solaris_datagram_t **out);
 
 #endif

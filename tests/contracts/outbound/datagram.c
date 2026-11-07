@@ -13,12 +13,13 @@ typedef struct udp_case {
     solaris_replay_store_t *replay;
     solaris_datagram_t *channel;
     solaris_deadline_t *timer;
+    solaris_deferred_t advance;
     solaris_test_event_t ready, done;
     solaris_address_t destinations[PACKETS], sources[PACKETS];
     size_t lengths[PACKETS];
     unsigned int opens, closes, sent, completed, received, writable;
     unsigned int seen[PACKETS];
-    int mode, uot, deny_udp443;
+    int mode, uot, deny_udp443, finishing;
     size_t message_limit;
     uint64_t bytes;
     solaris_tracker_t *tracker;
@@ -29,10 +30,16 @@ static uint8_t pattern(unsigned int packet, size_t n) { return n == 0u ? (uint8_
 static void pump(udp_case_t *test);
 static void finish(udp_case_t *test)
 {
-    if (test->mode == 0 && test->received == PACKETS && test->completed == PACKETS) {
+    if (!test->finishing && test->mode == 0 && test->received == PACKETS && test->completed == PACKETS) {
+        test->finishing = 1;
         if (test->timer != NULL) solaris_deadline_cancel(test->timer);
         CHECK(solaris_datagram_close(test->channel) == SOLARIS_OK);
     }
+}
+static void advance(void *context)
+{
+    udp_case_t *test = context;
+    if (!test->finishing) { pump(test); finish(test); }
 }
 static void sent(void *context, solaris_status_t status)
 {
@@ -41,7 +48,12 @@ static void sent(void *context, solaris_status_t status)
     if (test->mode == 3)
         CHECK(status == SOLARIS_OK || status == SOLARIS_EIO || status == SOLARIS_EACCESS || status == SOLARIS_ECANCELLED || status == SOLARIS_ECLOSED);
     else if (test->mode != 2) CHECK(status == SOLARIS_OK);
-    test->completed++; finish(test);
+    test->completed++;
+    /* A reply may precede the local send completion. Advance after this
+     * completion unwinds, so lower layers can also deliver their promised
+     * writable notification before the fixture closes the final packet. */
+    if (test->mode == 0 && !test->advance.queued)
+        CHECK(solaris_executor_defer(test->owner, &test->advance) == SOLARIS_OK);
 }
 static void timer(void *context, solaris_status_t status)
 {
@@ -102,13 +114,22 @@ static void closed(void *context, solaris_datagram_t *channel, solaris_status_t 
 static const solaris_datagram_callbacks_t callbacks = {opened, packet, writable, closed};
 static void pump(udp_case_t *test)
 {
-    if (test->sent == PACKETS || (test->sent > test->received && test->mode == 0) || (test->mode != 0 && test->sent != 0u)) return;
+    if (test->finishing || test->sent == PACKETS ||
+        (test->mode == 0 && (test->sent > test->received || test->sent > test->completed)) ||
+        (test->mode != 0 && test->sent != 0u)) return;
     unsigned int index = test->sent;
     solaris_buffer_t *buffer; CHECK(solaris_buffer_allocate(solaris_executor_budget(test->owner), test->lengths[index], &buffer) == SOLARIS_OK);
     for (size_t i = 0u; i < test->lengths[index]; ++i) solaris_buffer_mutable_data(buffer)[i] = pattern(index, i);
     CHECK(solaris_buffer_set_length(buffer, test->lengths[index]) == SOLARIS_OK);
     solaris_slice_t slice = {buffer, 0u, test->lengths[index]};
-    CHECK(solaris_datagram_send(test->channel, &test->destinations[index], &slice, sent, test) == SOLARIS_OK);
+    solaris_status_t status = solaris_datagram_send(test->channel, &test->destinations[index], &slice, sent, test);
+    if (status != SOLARIS_OK) {
+        solaris_io_snapshot_t snapshot = {0}; (void)solaris_datagram_get_snapshot(test->channel, &snapshot);
+        fprintf(stderr, "UDP first-submit rc=%d index=%u sent=%u completed=%u received=%u pending=%zu bytes=%zu family=%u mode=%d\n",
+            status, index, test->sent, test->completed, test->received, snapshot.pending_requests,
+            snapshot.pending_bytes, test->destinations[index].family, test->mode);
+    }
+    CHECK(status == SOLARIS_OK);
     CHECK(solaris_datagram_send(test->channel, &test->destinations[index], &slice, sent, test) == SOLARIS_EAGAIN);
     test->sent++; test->bytes += test->lengths[index]; solaris_buffer_release(buffer);
     if (test->mode == 2) {
@@ -179,6 +200,7 @@ int main(int argc, char **argv)
     for (unsigned int i = 0u; i < 2u; ++i) {
         udp_case_t *test = &cases[i]; test->config = config; test->replay = replay; test->mode = atoi(argv[8]) >= 4 ? 0 : atoi(argv[8]);
         test->tracker = tracker;
+        test->advance = (solaris_deferred_t){.run = advance, .context = test};
         CHECK(solaris_traffic_counter_create(budget, &test->traffic) == SOLARIS_OK);
         test->deny_udp443 = argc == 14 && strcmp(argv[13], "xtls-rprx-vision") == 0;
         test->uot = uot; test->message_limit = uot ? 65535u : 65000u;

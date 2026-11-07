@@ -9,7 +9,10 @@ enum {
     SOLARIS_OUTBOUND_STREAM_DOMAIN = 1u << 2,
     SOLARIS_OUTBOUND_DATAGRAM_MULTI = 1u << 3,
     SOLARIS_OUTBOUND_HALF_CLOSE = 1u << 4,
-    SOLARIS_OUTBOUND_DATAGRAM_DOMAIN = 1u << 5
+    SOLARIS_OUTBOUND_DATAGRAM_DOMAIN = 1u << 5,
+    /* Reuse a numeric route resolution for actual dialing while preserving
+     * the original destination in metadata. Remote-domain adapters omit it. */
+    SOLARIS_OUTBOUND_LOCAL_RESOLUTION = 1u << 6
 };
 
 typedef struct solaris_outbound_ops {

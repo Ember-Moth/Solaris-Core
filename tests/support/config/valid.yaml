@@ -1,0 +1,21 @@
+x-node: &node
+  type: socks5
+  server: 127.0.0.1
+  port: 1080
+  udp: false
+proxies:
+  - <<: *node
+    name: proxy
+    udp: true
+proxy-groups:
+  - name: select
+    type: select
+    proxies: [proxy, DIRECT, REJECT]
+rules:
+  - DOMAIN-SUFFIX,example.com,select
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - MATCH,REJECT
+mode: global
+port: 0
+socks-port: 0
+mixed-port: 0

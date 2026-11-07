@@ -6,6 +6,7 @@
 
 struct solaris_http_probe {
     solaris_scope_t scope;
+    solaris_scope_t *parent_scope;
     solaris_stream_t *stream;
     solaris_deadline_t *deadline;
     solaris_dial_plan_t plan;
@@ -55,7 +56,9 @@ static void destroyed(void *context)
 #endif
     solaris_buffer_release(probe->request);
     if (probe->accepted) probe->done(probe->context, probe, &probe->result);
+    solaris_scope_t *parent = probe->parent_scope;
     solaris_memory_free(probe);
+    if (parent) solaris_scope_release(parent);
 }
 static void deadline(void *context, solaris_status_t status)
 {
@@ -107,7 +110,7 @@ static void data(void *context, solaris_stream_t *stream, const solaris_buffer_t
         (void)solaris_stream_set_reading(stream, 0); maybe_complete(probe); return;
     }
 }
-static void eof(void *context, solaris_stream_t *stream)
+static void stream_eof(void *context, solaris_stream_t *stream)
 { (void)stream; solaris_http_probe_t *probe = context; if (!probe->settled && !probe->response_ready) settle(probe, SOLARIS_EIO); }
 static void closed(void *context, solaris_stream_t *stream, solaris_status_t status)
 {
@@ -118,7 +121,7 @@ static void closed(void *context, solaris_stream_t *stream, solaris_status_t sta
     }
     solaris_scope_release(&probe->scope);
 }
-static const solaris_stream_callbacks_t callbacks = {opened, data, eof, NULL, closed};
+static const solaris_stream_callbacks_t callbacks = {opened, data, stream_eof, NULL, closed};
 #if SOLARIS_HAS_TLS
 static solaris_status_t carrier_open(void *context, solaris_executor_t *owner, const solaris_dialer_options_t *options,
     const solaris_address_t *peer, const solaris_stream_callbacks_t *cb, void *user, solaris_stream_t **out)
@@ -134,7 +137,9 @@ solaris_status_t solaris_http_probe_start(solaris_executor_t *owner, solaris_dia
     *out = NULL;
     if (owner == NULL || source == NULL || source->outbound == NULL || source->release == NULL || source->node_id == 0u ||
         options == NULL || done == NULL || options->timeout_ms == 0u || options->timeout_ms > UINT64_MAX / UINT64_C(1000000)) return SOLARIS_EINVAL;
-    if (!solaris_executor_is_owner(owner) || source->outbound->owner != owner) return SOLARIS_ETHREAD;
+    if (!solaris_executor_is_owner(owner) || source->outbound->owner != owner ||
+        (options->parent_scope && options->parent_scope->owner != owner)) return SOLARIS_ETHREAD;
+    if (options->parent_scope && (options->parent_scope->cancelled || options->parent_scope->finishing)) return SOLARIS_ECLOSED;
     uint32_t caps; solaris_status_t rc = solaris_outbound_capabilities(source->outbound, &caps);
     if (rc != SOLARIS_OK || !(caps & SOLARIS_OUTBOUND_STREAM)) return SOLARIS_ENOTSUP;
     solaris_http_probe_t *probe = solaris_memory_allocate(solaris_executor_budget(owner), sizeof(*probe));
@@ -150,29 +155,40 @@ solaris_status_t solaris_http_probe_start(solaris_executor_t *owner, solaris_dia
 #endif
     }
     uint64_t now = solaris_executor_now_ns(owner), duration = options->timeout_ms * UINT64_C(1000000);
-    if (rc == SOLARIS_OK && now > UINT64_MAX - duration) rc = SOLARIS_EOVERFLOW;
+    if (rc == SOLARIS_OK && !options->deadline_ns && now > UINT64_MAX - duration) rc = SOLARIS_EOVERFLOW;
+    if (rc == SOLARIS_OK && options->deadline_ns && now >= options->deadline_ns) rc = SOLARIS_ETIMEDOUT;
     if (rc != SOLARIS_OK) { solaris_buffer_release(probe->request); solaris_memory_free(probe); return rc; }
     probe->result = (solaris_http_probe_result_t){.node_id = source->node_id, .selection_revision = source->selection_revision, .started_ns = now};
-    probe->deadline_ns = now + duration; probe->health = options->health; solaris_select_control_retain(probe->health);
+    probe->deadline_ns = options->deadline_ns ? options->deadline_ns : now + duration; probe->health = options->health; solaris_select_control_retain(probe->health);
 #if SOLARIS_HAS_TLS
     if (probe->target.tls) { probe->trust = options->trust; solaris_tls_context_retain(probe->trust); }
 #endif
     rc = solaris_scope_init(&probe->scope, owner, cancelled, destroyed, probe);
     if (rc != SOLARIS_OK) { destroyed(probe); return rc; }
+    if (options->parent_scope) {
+        probe->parent_scope = options->parent_scope;
+        solaris_scope_retain(probe->parent_scope);
+    }
     solaris_scope_retain(&probe->scope);
-    rc = solaris_deadline_start(owner, options->timeout_ms, deadline, probe, &probe->deadline);
+    uint64_t remaining = probe->deadline_ns - now;
+    uint64_t delay_ms = remaining / UINT64_C(1000000) + (remaining % UINT64_C(1000000) != 0);
+    rc = solaris_deadline_start(owner, delay_ms, deadline, probe, &probe->deadline);
     if (rc != SOLARIS_OK) { solaris_scope_release(&probe->scope); settle(probe, rc); return rc; }
     if (probe->health != NULL) {
         rc = solaris_select_probe_begin(probe->health, source->node_id, &probe->token);
         if (rc != SOLARIS_OK) { settle(probe, rc); return rc; }
     }
     if (options->tracker != NULL) {
-        solaris_observe_options_t observe = {.kind = SOLARIS_FLOW_STREAM, .purpose = SOLARIS_FLOW_PROBE, .target = probe->target.address};
+        solaris_observe_options_t observe = {.kind = SOLARIS_FLOW_STREAM, .purpose = SOLARIS_FLOW_PROBE,
+            .target = probe->target.address, .dial_target = probe->target.address,
+            .config_revision = options->config_revision, .selection_revision = source->selection_revision,
+            .rule_index = UINT64_MAX, .network = 6};
         solaris_dial_plan_t candidate = *source;
         rc = solaris_observe_plan(options->tracker, &candidate, &observe, &probe->plan, &probe->result.connection_id);
         if (rc != SOLARIS_OK) { settle(probe, rc); return rc; }
     } else probe->plan = *source;
     memset(source, 0, sizeof(*source)); probe->accepted = 1; *out = probe;
+    if (solaris_executor_now_ns(owner) >= probe->deadline_ns) { settle(probe, SOLARIS_ETIMEDOUT); return SOLARIS_OK; }
 #if SOLARIS_HAS_TLS
     if (probe->target.tls) {
         solaris_stream_factory_t carrier = {.context = probe, .open = carrier_open};

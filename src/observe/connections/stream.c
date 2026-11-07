@@ -63,7 +63,7 @@ static void data(void *context, solaris_stream_t *lower, const solaris_buffer_t 
     size_t length = solaris_buffer_length(buffer); stream->stats.bytes_read += length;
     solaris_track_read(stream->channel.plan, length, NULL); stream->callbacks.on_data(stream->context, &stream->stream, buffer);
 }
-static void eof(void *context, solaris_stream_t *lower)
+static void stream_eof(void *context, solaris_stream_t *lower)
 {
     (void)lower; tracked_stream_t *stream = context;
     if (stream->channel.scope.cancelled || stream->stats.read_eof) return;
@@ -80,7 +80,7 @@ static void closed(void *context, solaris_stream_t *lower, solaris_status_t stat
     (void)lower; tracked_stream_t *stream = context; refresh(stream); stream->lower = NULL;
     close_status(&stream->channel, status); solaris_scope_release(&stream->channel.scope);
 }
-static const solaris_stream_callbacks_t lower_callbacks = {opened, data, eof, writable, closed};
+static const solaris_stream_callbacks_t lower_callbacks = {opened, data, stream_eof, writable, closed};
 static void completed(void *context, solaris_status_t status)
 {
     stream_request_t *request = context; tracked_stream_t *stream = request->stream;

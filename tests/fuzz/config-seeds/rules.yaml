@@ -1,0 +1,12 @@
+mode: rule
+rules:
+  - DOMAIN,example.com,DIRECT
+  - DOMAIN-SUFFIX,.example.com.,REJECT
+  - DOMAIN-KEYWORD,example,DIRECT
+  - IP-CIDR,192.0.2.0/24,DIRECT,no-resolve
+  - IP-CIDR6,2001:db8::/32,DIRECT
+  - SRC-IP-CIDR,127.0.0.0/8,DIRECT
+  - SRC-PORT,1000-2000,DIRECT
+  - DST-PORT,443,DIRECT
+  - NETWORK,udp,DIRECT
+  - MATCH,DIRECT

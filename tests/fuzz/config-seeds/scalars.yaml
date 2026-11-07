@@ -1,0 +1,9 @@
+x-values: [yes, on, no, off, _123, 123_, 0123, 08, 1.20, 1e3, .nan, .inf, tRuE, nan, Inf, 0x1p3, !!str null, !!str 7890]
+proxies:
+  - name: scalar-probe
+    type: socks5
+    server: localhost
+    port: 1080
+    username: yes
+    password: _123
+    udp: true

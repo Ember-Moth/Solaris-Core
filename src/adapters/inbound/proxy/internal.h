@@ -6,6 +6,7 @@
 #include "transport/socket/tcp.h"
 #include "codec/http/proxy.h"
 #include "codec/address/socks.h"
+#include "observe/connections/tracker.h"
 
 typedef enum proxy_state {
     PROXY_DETECT,
@@ -30,7 +31,7 @@ struct solaris_proxy_inbound {
     proxy_connection_t *connections;
     uint64_t serial;
     solaris_status_t status;
-    int accepted;
+    int accepted, parent_retained;
 };
 struct proxy_connection {
     solaris_scope_t scope;
@@ -40,6 +41,10 @@ struct proxy_connection {
     solaris_stream_callbacks_t callbacks;
     void *callback_context;
     solaris_tcp_relay_t *relay;
+    solaris_route_job_t *route_job;
+    int context_retained;
+    solaris_proxy_context_t capture;
+    solaris_tracked_flow_t *flow;
     solaris_deferred_t deferred;
     solaris_http_request_t *http;
     solaris_http_upgrade_response_t *upgrade;
@@ -73,6 +78,9 @@ void solaris_proxy_socks_reply(proxy_connection_t *connection, uint8_t code, con
                                proxy_state_t next);
 void solaris_proxy_http_error(proxy_connection_t *connection, unsigned code);
 void solaris_proxy_connect(proxy_connection_t *connection);
+solaris_status_t solaris_proxy_route_options(proxy_connection_t *connection, uint32_t network,
+                                             const solaris_address_t *destination, solaris_route_options_t *out);
+void solaris_proxy_route_options_release(solaris_route_options_t *options);
 void solaris_proxy_socks_parse(proxy_connection_t *connection);
 solaris_status_t solaris_proxy_udp_create(solaris_proxy_inbound_t *inbound);
 void solaris_proxy_udp_open(proxy_connection_t *connection);
