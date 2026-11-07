@@ -3,7 +3,7 @@
 import hashlib
 import importlib.util
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import tempfile
 import unittest
 
@@ -14,6 +14,31 @@ SPEC.loader.exec_module(RECIPE)
 
 
 class RecipeTest(unittest.TestCase):
+    def test_tree_digest_is_platform_independent(self):
+        class Entry:
+            def __init__(self, name, flavor):
+                self.relative = flavor(name)
+            def relative_to(self, root):
+                return self.relative
+            def __lt__(self, other):
+                return self.relative < other.relative
+            def is_symlink(self):
+                return False
+            def is_file(self):
+                return True
+            def read_bytes(self):
+                return b"unchanged\r\nbytes\x00"
+        class Tree:
+            def __init__(self, flavor):
+                self.flavor = flavor
+            def rglob(self, pattern):
+                return [Entry(name, self.flavor) for name in
+                        ("a.txt", "B.txt", "dir.txt", "dir/Child")]
+        # Fixed POSIX digest: case and raw CRLF/NUL bytes remain significant.
+        expected = "3037b9ffe9d0528ca9522ee2432bb760dfc8fec1885e106a8d33f03a2fd269a9"
+        for flavor in (PurePosixPath, PureWindowsPath):
+            self.assertEqual(RECIPE.tree_hash(Tree(flavor)), expected)
+
     def test_integrity_and_reapplication(self):
         with tempfile.TemporaryDirectory(prefix="solaris-recipe-") as temp:
             root = Path(temp).resolve(); project = root / "project"; source = root / "upstream"; output = root / "patched"

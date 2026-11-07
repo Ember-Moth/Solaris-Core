@@ -11,7 +11,9 @@ import tempfile
 
 def tree_hash(root):
     digest = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
+    # Path ordering is case-insensitive on Windows. Hash the same case-sensitive
+    # path-component order as the pinned POSIX tree, without changing any bytes.
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).parts):
         rel = path.relative_to(root)
         if rel.parts[0] == ".git":
             continue

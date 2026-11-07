@@ -4,6 +4,7 @@ import argparse
 import base64
 import importlib.util
 from pathlib import Path
+import re
 import struct
 import subprocess
 import sys
@@ -103,8 +104,14 @@ def main():
         with tempfile.TemporaryDirectory(prefix="solaris-fuzz-ss-") as directory:
             subprocess.run([args.ss_control, "fixtures", directory], check=True, timeout=20)
             for file in sorted(Path(directory).glob("*.bin")):
-                parts = file.stem.split("-")
-                seed(7 if parts[0] == "stream" else 8, file.read_bytes(), int(parts[1]), file.stem)
+                # Request/EIH fixtures exercise the independent server decoder
+                # in codec tests. This fuzzer consumes client-side responses.
+                if re.fullmatch(r"request-(stream|packet)-[3-5]-(0|1|2|8)", file.stem):
+                    continue
+                match = re.fullmatch(r"(stream|packet)-([0-5])-([0-9]+)", file.stem)
+                if match is None:
+                    raise ValueError(f"unrecognized Shadowsocks response fixture: {file.name}")
+                seed(7 if match[1] == "stream" else 8, file.read_bytes(), int(match[2]), file.stem)
     if bool(args.encryption_control) != bool(args.encryption_client):
         raise ValueError("encryption control and client must be provided together")
     if args.encryption_control:

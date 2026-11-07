@@ -714,6 +714,9 @@ if(SOLARIS_BUILD_TESTS AND BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
                 DEPENDS tests/support/outbound/shadowsocks/control/go.mod tests/support/outbound/shadowsocks/control/go.sum tests/support/outbound/shadowsocks/control/main.go tests/support/outbound/shadowsocks/control/fixtures.go
                 VERBATIM)
             add_custom_target(solaris_ss_control_peer ALL DEPENDS "${solaris_ss_control}")
+            add_test(NAME parser_seed_contract COMMAND "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/tests/contracts/fuzz/seeds.py" "${solaris_ss_control}")
+            set_tests_properties(parser_seed_contract PROPERTIES TIMEOUT 40)
             add_executable(solaris_ss_codec_tests tests/contracts/outbound/shadowsocks/codec.c)
             solaris_configure_target(solaris_ss_codec_tests)
             target_include_directories(solaris_ss_codec_tests PRIVATE src tests)

@@ -76,7 +76,8 @@ static solaris_status_t codec_decode(void *state, const uint8_t *p, size_t n, si
     if (p[0] == 4u) { event->kind = SOLARIS_SESSION_READY; event->id = p[1]; *used = 3u; return SOLARIS_OK; }
     CHECK(p[0] == 2u); event->kind = SOLARIS_SESSION_DATA; event->id = p[1];
     solaris_status_t rc = solaris_buffer_copy(c->budget, p + 3, p[2], &event->data);
-    if (rc == SOLARIS_OK) *used = 3u + p[2]; return rc;
+    if (rc == SOLARIS_OK) *used = 3u + p[2];
+    return rc;
 }
 static void codec_destroy(void *state) { solaris_memory_free(state); }
 static const solaris_session_codec_t codec = {258u, codec_create, codec_start, codec_open, codec_write, codec_end, codec_decode, codec_destroy};
