@@ -90,12 +90,13 @@ solaris_status_t solaris_route_rule_compile(const char *kind, const char *value,
             else if (offset + 8 > prefix) rule.address.ip[i] &= (uint8_t)(255u << (8 - (prefix - offset)));
         }
     } else if (rule.kind == SOLARIS_ROUTE_SRC_PORT || rule.kind == SOLARIS_ROUTE_DST_PORT) {
-        const char *dash = memchr(value, '-', length); unsigned first, last;
+        const char *dash = memchr(value, '-', length); unsigned first;
         size_t first_length = dash ? (size_t)(dash - value) : length;
-        if (!number(value, first_length, 65535, &first) ||
-            (dash && !number(dash + 1, length - first_length - 1, 65535, &last)))
+        if (!number(value, first_length, 65535, &first))
             return invalid(error, SOLARIS_EINVAL, "Invalid port or inclusive port range");
-        if (!dash) last = first;
+        unsigned last = first;
+        if (dash && !number(dash + 1, length - first_length - 1, 65535, &last))
+            return invalid(error, SOLARIS_EINVAL, "Invalid port or inclusive port range");
         if (first > last) return invalid(error, SOLARIS_EINVAL, "Port range is reversed");
         rule.port_first = (uint16_t)first; rule.port_last = (uint16_t)last;
     } else {

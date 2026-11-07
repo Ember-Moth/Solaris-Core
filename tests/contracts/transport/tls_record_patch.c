@@ -30,8 +30,10 @@ static void run(SSL_CTX *client_ctx, SSL_CTX *server_ctx, unsigned version, unsi
 {
     tls_test_pair_t *pair = calloc(1u, sizeof(*pair)); CHECK(pair); tls_test_pair_init(pair, client_ctx, server_ctx);
     fixture_t test = {.mode = mode}; pair->context = &test; pair->record = alter;
-    CHECK(SSL_set_min_proto_version(pair->client, version) && SSL_set_max_proto_version(pair->client, version));
-    CHECK(SSL_set_min_proto_version(pair->server, version) && SSL_set_max_proto_version(pair->server, version));
+    CHECK(version <= UINT16_MAX);
+    uint16_t protocol_version = (uint16_t)version;
+    CHECK(SSL_set_min_proto_version(pair->client, protocol_version) && SSL_set_max_proto_version(pair->client, protocol_version));
+    CHECK(SSL_set_min_proto_version(pair->server, protocol_version) && SSL_set_max_proto_version(pair->server, protocol_version));
     if (version == TLS1_3_VERSION) {
         uint16_t id = (uint16_t)(0x1301u + cipher);
         CHECK(SSL_set1_tls13_ciphers(pair->client, &id, NULL, 1u) && SSL_set1_tls13_ciphers(pair->server, &id, NULL, 1u));

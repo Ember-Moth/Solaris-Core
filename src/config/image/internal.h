@@ -2,12 +2,13 @@
 #define SOLARIS_CONFIG_INTERNAL_H
 #include "contracts/config/image.h"
 #include "contracts/io/buffer.h"
+#include "runtime/memory/alignment.h"
 #include <stdatomic.h>
 #include <stdio.h>
 
 typedef union cfg_allocation cfg_allocation_t;
 union cfg_allocation {
-    max_align_t align;
+    solaris_max_align_t align;
     struct {
         cfg_allocation_t *next;
         size_t size;

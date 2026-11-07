@@ -109,7 +109,7 @@ solaris_status_t solaris_registry_create(const solaris_outbound_module_t *const 
     solaris_registry_t *registry = solaris_memory_allocate(budget, sizeof(*registry) + count * sizeof(*modules));
     if (registry == NULL) return solaris_error_set(error, SOLARIS_ENOMEM, 0, NULL);
     registry->budget = budget; registry->count = count;
-    if (count != 0u) memcpy(registry->modules, modules, count * sizeof(*modules));
+    for (size_t i = 0; i < count; ++i) registry->modules[i] = modules[i];
     unsigned char marks[MODULE_LIMIT] = {0};
     for (size_t i = 0; i < count; ++i) {
         solaris_status_t rc = visit(registry, i, marks, error);

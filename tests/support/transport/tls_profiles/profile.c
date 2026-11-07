@@ -18,6 +18,13 @@
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #x); ERR_print_errors_fp(stderr); abort(); } } while (0)
 static const char password[] = "solaris-tls-patch-password";
 static unsigned u16(const uint8_t *p) { return ((unsigned)p[0] << 8) | p[1]; }
+static unsigned hex_digit(char c)
+{
+    if (c >= '0' && c <= '9') return (unsigned)(c - '0');
+    if (c >= 'a' && c <= 'f') return (unsigned)(c - 'a') + 10u;
+    if (c >= 'A' && c <= 'F') return (unsigned)(c - 'A') + 10u;
+    CHECK(0); return 0u;
+}
 static int jls_random(tls_test_profile_t *p, const uint8_t *wire, size_t size, uint8_t random[32], int decrypt)
 {
     if (size < 38u || size > 65536u) return 0;
@@ -98,13 +105,18 @@ static int hello(SSL *ssl, const uint8_t *wire, size_t size, SSL_SOLARIS_CLIENT_
         if (!SSL_early_callback_ctx_extension_get(&parsed, TLSEXT_TYPE_key_share, &ext, &length) || length < 2u) return 0;
         size_t offset = 2u;
         while (offset < length) {
-            if (length - offset < 4u) return 0; size_t n = u16(ext + offset + 2u); if (n > length - offset - 4u) return 0;
+            if (length - offset < 4u) return 0;
+            size_t n = u16(ext + offset + 2u);
+            if (n > length - offset - 4u) return 0;
             blake3_hasher_update(&h, ext + offset, 2u); blake3_hasher_update(&h, ext + offset + 4u, n); offset += 4u + n;
         }
         if (SSL_early_callback_ctx_extension_get(&parsed, TLSEXT_TYPE_pre_shared_key, &ext, &length)) {
-            if (length < 2u || u16(ext) > length - 2u) return 0; size_t end = 2u + u16(ext); offset = 2u;
+            if (length < 2u || u16(ext) > length - 2u) return 0;
+            size_t end = 2u + u16(ext); offset = 2u;
             while (offset < end) {
-                if (end - offset < 2u) return 0; size_t n = u16(ext + offset); offset += 2u; if (n + 4u > end - offset) return 0;
+                if (end - offset < 2u) return 0;
+                size_t n = u16(ext + offset); offset += 2u;
+                if (n + 4u > end - offset) return 0;
                 blake3_hasher_update(&h, ext + offset, n); offset += n + 4u;
             }
         }
@@ -171,7 +183,8 @@ void tls_test_profile_init(tls_test_profile_t *p, const char *kind, const char *
     if (strcmp(variant, "hybrid") == 0) p->reality_group = SSL_GROUP_X25519_MLKEM768;
     if (p->kind == PROFILE_REALITY) {
         CHECK(strlen(public_hex) == 64u);
-        for (unsigned i = 0u; i < 32u; ++i) { unsigned value; CHECK(sscanf(public_hex + 2u * i, "%2x", &value) == 1); p->server_key[i] = (uint8_t)value; }
+        for (unsigned i = 0u; i < 32u; ++i)
+            p->server_key[i] = (uint8_t)((hex_digit(public_hex[2u * i]) << 4u) | hex_digit(public_hex[2u * i + 1u]));
         if (strcmp(variant, "wrong") == 0) { uint8_t secret[32]; memset(secret, 0x71, 32u); X25519_public_from_private(p->server_key, secret); }
     }
     if (p->kind == PROFILE_RESTLS12 || p->kind == PROFILE_RESTLS13) {

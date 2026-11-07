@@ -107,7 +107,7 @@ static SSL_SESSION *run(SSL_CTX *client_ctx, SSL_CTX *server_ctx, int mode, SSL_
         CHECK(SSL_get_verify_result(client) == X509_V_OK);
         CHECK(SSL_session_reused(client) == (resume != NULL));
         if (mode == AUTH) {
-            CHECK(test.calls == 1u && test.psk == (resume != NULL));
+            CHECK(test.calls == 1u && test.psk == (unsigned)(resume != NULL));
             uint8_t random[32]; CHECK(SSL_get_client_random(server, random, 32u) == 32u);
             for (unsigned i = 0u; i < 32u; ++i) CHECK(random[i] == 0xa3);
         } else CHECK(test.calls == 0u);

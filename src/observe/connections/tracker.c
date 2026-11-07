@@ -17,7 +17,6 @@ struct close_request {
     uint64_t matched;
     solaris_close_link_t links[];
 };
-static const solaris_outbound_ops_t operations;
 static void finalize(solaris_observed_plan_t *plan)
 {
     if (!plan->finished || (plan->attached && !plan->released) || plan->channels || !plan->registered ||

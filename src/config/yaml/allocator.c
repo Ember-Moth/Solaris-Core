@@ -6,7 +6,7 @@ static __declspec(thread) solaris_budget_t *active_budget;
 static _Thread_local solaris_budget_t *active_budget;
 #endif
 typedef union yaml_allocation {
-    max_align_t alignment;
+    solaris_max_align_t alignment;
     size_t size;
 } yaml_allocation_t;
 solaris_budget_t *solaris_yaml_enter_budget(solaris_budget_t *budget)

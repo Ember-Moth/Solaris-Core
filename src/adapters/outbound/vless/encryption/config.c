@@ -43,8 +43,8 @@ static int key(const char *part, size_t size, solaris_vless_encryption_key_t *ou
     if (!EVP_DecodeBase64(decoded, &out->length, sizeof(decoded), base64, size + 1u) ||
         (out->length != 32u && out->length != 1184u)) return 0;
     memcpy(out->bytes, decoded, out->length);
-    int encoded_size = EVP_EncodeBlock(encoded, out->bytes, out->length);
-    if (encoded_size != (int)(size + 1u) || memcmp(base64, encoded, size + 1u) != 0) return 0;
+    size_t encoded_size = EVP_EncodeBlock(encoded, out->bytes, out->length);
+    if (encoded_size != size + 1u || memcmp(base64, encoded, size + 1u) != 0) return 0;
     if (out->length == 32u) {
         uint8_t private_key[32] = {9u}, shared[32];
         int valid = out->bytes[31] < 128u && X25519(shared, private_key, out->bytes);

@@ -1,4 +1,5 @@
 #include "contracts/io/buffer.h"
+#include "runtime/memory/alignment.h"
 #include <assert.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -12,7 +13,7 @@ struct solaris_budget {
 };
 
 typedef union solaris_allocation {
-    max_align_t alignment;
+    solaris_max_align_t alignment;
     struct {
         solaris_budget_t *budget;
         size_t charge;

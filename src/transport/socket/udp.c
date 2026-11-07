@@ -88,8 +88,8 @@ static void alloc_read(uv_handle_t *native, size_t suggested, uv_buf_t *buffer)
         buffer->base = NULL; buffer->len = 0u;
         return;
     }
-    buffer->base = (char *)solaris_buffer_mutable_data(udp->receive_buffer);
-    buffer->len = solaris_buffer_capacity(udp->receive_buffer);
+    *buffer = uv_buf_init((char *)solaris_buffer_mutable_data(udp->receive_buffer),
+                          (unsigned int)solaris_buffer_capacity(udp->receive_buffer));
 }
 
 static void on_read(uv_udp_t *native, ssize_t count, const uv_buf_t *buffer,
