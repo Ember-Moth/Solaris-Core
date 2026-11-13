@@ -11,13 +11,12 @@ from runtime_proxy import (Runtime, Peer, echo, until, by_name, connect, socks_g
                            udp_exchange, assert_echo)
 
 
-def yaml_config(http, socks, members='DIRECT, REJECT', mode='rule'):
-    return (f'mode: {mode}\nlisteners:\n'
-            f'  - {{name: web, type: http, listen: 127.0.0.1, port: {http}}}\n'
-            f'  - {{name: socks, type: socks, listen: 127.0.0.1, port: {socks}, udp: true}}\n'
-            'proxy-groups:\n'
-            f'  - {{name: Route, type: select, proxies: [{members}]}}\n'
-            'rules: ["MATCH,Route"]\n')
+def conf_config(http, socks, members='DIRECT, REJECT', mode='rule'):
+    return (f'[General]\nconfig-version=1\nmode={mode}\n[Listener]\n'
+            f'web=http,127.0.0.1,{http}\n'
+            f'socks=socks5,127.0.0.1,{socks},udp-relay=true\n'
+            f'[Proxy Group]\nRoute=select,{members}\n'
+            '[Rule]\nFINAL,Route\n')
 
 
 def u64(*values):
@@ -91,7 +90,7 @@ def test(binary):
     runtime = Runtime(binary)
     target = Peer(echo)
     udp = Peer(None, udp=True)
-    p = by_name(runtime.prepare(0, yaml_config(18080, 18081), ephemeral=True))
+    p = by_name(runtime.prepare(0, conf_config(18080, 18081), ephemeral=True))
     http, socks = p['web']['port'], p['socks']['port']
     revision = runtime.commit(0)['revision']
     state = runtime.command('G')
@@ -131,7 +130,7 @@ def test(binary):
     udp_exchange(fresh_client, fresh_bound, udp, b'new-udp-rejected', success=False)
 
     # Candidate preparation must not capture the controls it will migrate.
-    runtime.prepare(1, yaml_config(http, socks))
+    runtime.prepare(1, conf_config(http, socks))
     mode(runtime, revision, 3)
     select(runtime, revision, route, direct)
     revision = runtime.commit(1)['revision']
@@ -140,7 +139,7 @@ def test(binary):
     group = next(g for g in state['groups'] if g['id'] == route)
     assert group['selected'] == direct and group['reason'] == 3
     select(runtime, revision, route, reject)
-    runtime.prepare(2, yaml_config(http, socks, members='DIRECT'))
+    runtime.prepare(2, conf_config(http, socks, members='DIRECT'))
     revision = runtime.commit(2)['revision']
     state = runtime.command('G')
     group = next(g for g in state['groups'] if g['id'] == route)
@@ -211,7 +210,7 @@ def test(binary):
     timeout.release.set()
 
     # A running probe owns its selected config across a configuration commit.
-    runtime.prepare(3, yaml_config(http, socks, members='DIRECT'))
+    runtime.prepare(3, conf_config(http, socks, members='DIRECT'))
     crossing = HeadPeer(wait=True)
     probe(runtime, revision, direct, crossing)
     assert crossing.received.wait(5)
@@ -246,7 +245,7 @@ def test(binary):
     assert not live(runtime)
     # Retain nonempty immutable snapshots through actual engine destruction.
     runtime.command('N')
-    runtime.prepare(4, yaml_config(http, socks, members='DIRECT'))
+    runtime.prepare(4, conf_config(http, socks, members='DIRECT'))
     revision = runtime.commit(4)['revision']
     current = http_tunnel(http, target)
     assert_echo(current, b'after-restart')

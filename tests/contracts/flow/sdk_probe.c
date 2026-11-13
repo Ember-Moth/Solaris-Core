@@ -117,14 +117,15 @@ static void init(fixture_t *f)
     solaris_engine_options_t options;
     solaris_engine_options_init(&options);
     options.io_workers = 2;
-    solaris_host_t host = {f, event};
+    solaris_host_t host = {.context = f, .on_event = event};
     CHECK(solaris_runtime_create(&options, &host, &services, &f->engine, NULL) == SOLARIS_OK);
     uint64_t id;
     CHECK(solaris_engine_start(f->engine, &id, NULL) == SOLARIS_OK);
     CHECK(solaris_engine_flush(f->engine, 5000, NULL) == SOLARIS_OK);
     solaris_config_t *image;
     solaris_diagnostics_t *diagnostics;
-    CHECK(solaris_config_compile_bytes("mode: rule\n", 11, NULL, &image, &diagnostics, NULL) == SOLARIS_OK);
+    const char *config = "[General]\nconfig-version=1\n[Rule]\nFINAL,DIRECT\n";
+    CHECK(solaris_config_compile_bytes(config, strlen(config), NULL, &image, &diagnostics, NULL) == SOLARIS_OK);
     solaris_diagnostics_release(diagnostics);
     solaris_config_node_info_t node;
     CHECK(solaris_config_get_node(image, 0, &node) == SOLARIS_OK);

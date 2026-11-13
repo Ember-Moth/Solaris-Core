@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Public YAML/SDK activation against the pinned independent protocol peer."""
+"""Public Conf/SDK activation against the pinned independent protocol peer."""
 import argparse
 import base64
 import json
@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import time
 
-from runtime_proxy import (Runtime, Peer, echo, config, by_name, http_tunnel,
+from runtime_proxy import (proxy_config, Runtime, Peer, echo, config, by_name, http_tunnel,
                            socks_tcp, udp_control, udp_exchange, assert_echo)
 from runtime_control import HeadPeer, probe
 
@@ -62,7 +62,7 @@ def test(args):
                              'method': method, 'password': secret})
             for uot in (False, True):
                 node = {'name': 'proxy', 'type': 'ss', 'server': '127.0.0.1', 'port': ports[index],
-                        'cipher': method, 'password': secret, 'udp': True}
+                        'encrypt-method': method, 'password': secret, 'udp-relay': True}
                 if uot:
                     node.update({'udp-over-tcp': True, 'udp-over-tcp-version': 2})
                 cases.append((method + (' UoT' if uot else ' native'), node))
@@ -70,20 +70,20 @@ def test(args):
             inbound = {'type': 'vless', 'listen': '127.0.0.1', 'listen_port': ports[offset],
                        'users': [{'uuid': uuid}]}
             node = {'name': 'proxy', 'type': 'vless', 'server': '127.0.0.1', 'port': ports[offset],
-                    'uuid': uuid, 'encryption': 'none', 'udp': True, 'packet-encoding': 'xudp'}
+                    'uuid': uuid, 'encryption': 'none', 'udp-relay': True, 'packet-encoding': 'xudp'}
             if encrypted:
                 inbound['tls'] = tls
-                node.update({'tls': True, 'servername': 'localhost'})
+                node.update({'tls': True, 'tls-server-name': 'localhost'})
             inbounds.append(inbound)
             cases.append(('VLESS TLS' if encrypted else 'VLESS plain', node))
         inbounds.append({'type': 'anytls', 'listen': '127.0.0.1', 'listen_port': ports[8],
                          'users': [{'name': 'runtime', 'password': password}], 'tls': tls})
         cases.append(('AnyTLS', {'name': 'proxy', 'type': 'anytls', 'server': '127.0.0.1',
-                                 'port': ports[8], 'password': password, 'sni': 'localhost', 'udp': True}))
+                                 'port': ports[8], 'password': password, 'tls-server-name': 'localhost', 'udp-relay': True}))
         inbounds.append({'type': 'socks', 'listen': '127.0.0.1', 'listen_port': ports[9],
                          'users': [{'username': 'runtime', 'password': password}]})
         cases.append(('SOCKS5', {'name': 'proxy', 'type': 'socks5', 'server': '127.0.0.1',
-                                 'port': ports[9], 'username': 'runtime', 'password': password, 'udp': True}))
+                                 'port': ports[9], 'username': 'runtime', 'password': password, 'udp-relay': True}))
         for index, inbound in enumerate(inbounds):
             inbound['tag'] = f'peer-{index}'
         peer_config = root / 'config.json'
@@ -108,15 +108,15 @@ def test(args):
                         time.sleep(.02)
                 runtime = Runtime(args.client)
                 tls_node = next(node for label, node in cases if label == 'VLESS TLS')
-                tls_yaml = config(18080, 18081, route='proxy') + 'proxies: [' + json.dumps(tls_node) + ']\n'
-                runtime.prepare(0, tls_yaml, ephemeral=True, expected=-1)
+                tls_conf = config(18080, 18081, route='proxy') + proxy_config(tls_node)
+                runtime.prepare(0, tls_conf, ephemeral=True, expected=-1)
                 runtime.command('Y', b'not-a-PEM-trust-bundle')
-                runtime.prepare(0, tls_yaml, ephemeral=True, expected=-1)
+                runtime.prepare(0, tls_conf, ephemeral=True, expected=-1)
                 assert runtime.command('Q')['revision'] == 0
                 runtime.command('Y', cert.read_bytes())
                 for label, node in cases:
-                    yaml = config(18080, 18081, route='proxy') + 'proxies: [' + json.dumps(node) + ']\n'
-                    prepared = runtime.prepare(0, yaml, ephemeral=True)
+                    conf = config(18080, 18081, route='proxy') + proxy_config(node)
+                    prepared = runtime.prepare(0, conf, ephemeral=True)
                     listeners = by_name(prepared)
                     assert len({x['worker'] for x in listeners.values()}) == 2
                     revision = runtime.commit(0)['revision']

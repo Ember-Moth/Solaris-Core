@@ -3,10 +3,11 @@
 #include <solaris/config.h>
 #include "contracts/flow/plan.h"
 #include "dns/system/resolver.h"
+#include "contracts/dns/lookup.h"
 
 enum { SOLARIS_ROUTE_DOMAIN = 1, SOLARIS_ROUTE_DOMAIN_SUFFIX, SOLARIS_ROUTE_DOMAIN_KEYWORD,
        SOLARIS_ROUTE_IP_CIDR, SOLARIS_ROUTE_IP_CIDR6, SOLARIS_ROUTE_SRC_IP_CIDR,
-       SOLARIS_ROUTE_SRC_PORT, SOLARIS_ROUTE_DST_PORT, SOLARIS_ROUTE_NETWORK, SOLARIS_ROUTE_MATCH };
+       SOLARIS_ROUTE_SRC_PORT, SOLARIS_ROUTE_DST_PORT, SOLARIS_ROUTE_NETWORK, SOLARIS_ROUTE_FINAL };
 enum { SOLARIS_NETWORK_TCP = 6, SOLARIS_NETWORK_UDP = 17 };
 typedef struct solaris_route_rule {
     uint32_t kind, no_resolve, network, prefix_length;
@@ -54,6 +55,13 @@ typedef struct solaris_route_options {
     solaris_status_t (*resolve)(void *context, solaris_executor_t *owner, const solaris_address_t *target,
         uint64_t timeout_ms, solaris_resolve_fn callback, void *user, void **request);
     void (*cancel_resolve)(void *context, void *request);
+    /* Optional fixed address lookup for later Direct UDP destination mappings.
+     * A routed association pins this routing context until final destruction
+     * when these hooks are set; retain/release must therefore be present.
+     * This lookup uses DIRECT_TARGET and the captured revisions, independent
+     * of a listener's older dispatcher context. It never reselects the plan. */
+    solaris_dns_lookup_t dial_lookup;
+    solaris_dns_lookup_view_t dial_lookup_view;
     /* Deferred, exactly once after accepted start, including cancel. result is
      * borrowed; move its owned plan with result_take_plan during this callback.
      * Unclaimed plans are released after callback. Job expires on return. */

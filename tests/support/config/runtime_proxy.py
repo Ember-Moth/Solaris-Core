@@ -47,8 +47,8 @@ class Runtime:
             assert value['status'] == expected, (kind, value, expected)
         return value
 
-    def prepare(self, slot, yaml, ephemeral=False, expected=0):
-        return self.command('P', bytes([slot, int(ephemeral)]) + yaml.encode(), expected)
+    def prepare(self, slot, conf, ephemeral=False, expected=0):
+        return self.command('P', bytes([slot, int(ephemeral)]) + conf.encode(), expected)
 
     def commit(self, slot, expected=0):
         return self.command('C', bytes([slot]), expected)
@@ -79,13 +79,30 @@ class DualStackPeer(Peer):
 
 
 def config(http_port, socks_port=None, route='DIRECT', auth=False, udp=True, extra=''):
-    users = ', users: [{username: user, password: newpass}]' if auth else ', users: []'
-    result = 'mode: rule\nlisteners:\n'
-    result += f'  - {{name: web, type: http, listen: 127.0.0.1, port: {http_port}}}\n'
+    result = '[General]\nconfig-version=1\nmode=rule\n[Listener]\n'
+    result += f'web = http, 127.0.0.1, {http_port}\n'
     if socks_port is not None:
-        result += (f'  - {{name: socks, type: socks, listen: 127.0.0.1, port: {socks_port}, '
-                   f'udp: {str(udp).lower()}{users}}}\n')
-    return result + extra + f'rules: ["MATCH,{route}"]\n'
+        selected = 'Local' if auth else '""'
+        result += (f'socks = socks5, 127.0.0.1, {socks_port}, '
+                   f'udp-relay={str(udp).lower()}, authentication={selected}\n')
+    result += extra
+    if auth:
+        result += '[Authentication]\nLocal = user=newpass\n'
+    return result + f'[Rule]\nFINAL,{route}\n'
+
+
+def proxy_config(node):
+    """Write native protocol records for the independent peer fixtures."""
+    import json
+    def token(value):
+        if isinstance(value, bool): return str(value).lower()
+        return json.dumps(str(value), ensure_ascii=False)
+    parts = [node['type']]
+    if node['type'] not in ('direct', 'reject'):
+        parts += [token(node['server']), token(node['port'])]
+    parts += [key + '=' + token(value) for key, value in node.items()
+              if key not in ('name', 'type', 'server', 'port')]
+    return '[Proxy]\n' + token(node['name']) + ' = ' + ', '.join(parts) + '\n'
 
 
 def by_name(prepared):
@@ -226,7 +243,7 @@ def test(binary):
     # Failure after candidate resources start cannot interrupt the old service.
     with socket.socket() as occupied:
         occupied.bind(('127.0.0.1', 0)); occupied.listen(4)
-        extra = f'  - {{name: blocked, type: http, listen: 127.0.0.1, port: {occupied.getsockname()[1]}}}\n'
+        extra = f'blocked = http, 127.0.0.1, {occupied.getsockname()[1]}\n'
         runtime.prepare(8, config(a, b, extra=extra), expected=-8)
         assert_echo(old_http, b'old-service-after-rollback')
         plain_http(a, http)
@@ -266,13 +283,13 @@ def test(binary):
     plain_http(b, http)
     assert_echo(old_socks, b'old-tcp-survives-entry-removal')
     udp_exchange(clients[0], ubound, udp6, b'old-udp-survives-entry-removal')
-    dns_config = config(b).replace('rules: ["MATCH,DIRECT"]',
-        'rules: ["IP-CIDR,127.0.0.0/8,DIRECT", "IP-CIDR6,::1/128,DIRECT", "MATCH,REJECT"]')
+    dns_config = config(b).replace('[Rule]\nFINAL,DIRECT',
+        '[Rule]\nIP-CIDR,127.0.0.0/8,DIRECT\nIP-CIDR6,::1/128,DIRECT\nFINAL,REJECT')
     runtime.prepare(10, dns_config); runtime.commit(10)
     dns_peer = DualStackPeer()
     with http_tunnel(b, SimpleNamespace(host='localhost', port=dns_peer.port)) as resolved:
         assert_echo(resolved, b'public-rule-lazy-dns')
-    candidate = runtime.prepare(6, 'listeners: [{name: pending, type: mixed, port: 18090}]\nrules: ["MATCH,DIRECT"]\n', ephemeral=True)
+    candidate = runtime.prepare(6, '[General]\nconfig-version=1\n[Listener]\npending=mixed,0.0.0.0,18090\n[Rule]\nFINAL,DIRECT\n', ephemeral=True)
     candidate_port = candidate['listeners'][0]['port']; no_admission(candidate_port)
     runtime.command('S')
     assert runtime.command('Q')['revision'] == 0

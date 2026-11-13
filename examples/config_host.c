@@ -585,7 +585,7 @@ static int command(host_t *host, int count, char **words)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s CONFIG.yaml [--trust CA.pem] [--workers N] [--ephemeral] [--check]\n", argv[0]);
+        fprintf(stderr, "usage: %s CONFIG.conf [--trust CA.pem] [--workers N] [--ephemeral] [--check]\n", argv[0]);
         return 2;
     }
     const char *path = argv[1], *trust_file = NULL;
@@ -651,7 +651,7 @@ int main(int argc, char **argv)
     solaris_engine_options_t options;
     solaris_engine_options_init(&options);
     options.io_workers = (uint32_t)workers;
-    solaris_host_t callbacks = {&host, event};
+    solaris_host_t callbacks = {.context = &host, .on_event = event};
     rc = solaris_engine_create(&options, &callbacks, &host.engine, &error);
     if (rc == SOLARIS_OK) {
         uint64_t id = 0;

@@ -16,6 +16,13 @@ solaris_status_t solaris_resolve_start(solaris_executor_t *executor,
                                        const solaris_address_t *target, uint64_t timeout_ms,
                                        solaris_resolve_fn callback, void *context,
                                        solaris_resolve_t **out);
+/* Same callback semantics, plus a same-owner drain fence retained until the
+ * underlying OS request, timer and result callback have all ended. Includes
+ * asynchronous cleanup after a rejected start. Result delivery alone is not
+ * this resource barrier; an uncancellable OS query may finish later. */
+solaris_status_t solaris_resolve_start_scoped(solaris_executor_t *executor,
+    solaris_scope_t *parent_scope, const solaris_address_t *target, uint64_t timeout_ms,
+    solaris_resolve_fn callback, void *context, solaris_resolve_t **out);
 void solaris_resolve_cancel(solaris_resolve_t *request);
 
 #endif

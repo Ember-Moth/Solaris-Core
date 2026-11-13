@@ -5,7 +5,7 @@
 
 /* Offline compile only: no filesystem, DNS, sockets, engines or callbacks.
  * Exercise public snapshot ownership after releasing diagnostics and retaining
- * the image independently. Limits also bound hostile alias/merge expansion. */
+ * the image independently. Limits also bound line, token, entry and AST allocation growth. */
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     solaris_config_options_t options;
@@ -13,9 +13,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     options.input_limit_bytes = 65536;
     options.memory_limit_bytes = 1024 * 1024;
     options.string_limit_bytes = 65536;
-    options.depth_limit = 32;
+    options.line_limit_bytes = 65536;
     options.node_limit = 2048;
-    options.alias_limit = 128;
+    options.entry_limit = 128;
     options.diagnostic_limit = 8;
     solaris_config_t *config = NULL;
     solaris_diagnostics_t *diagnostics = NULL;

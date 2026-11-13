@@ -5,6 +5,8 @@
 #include "runtime/config/slots.h"
 #include "runtime/config/publication.h"
 #include "runtime/config/control.h"
+#include "contracts/runtime/network.h"
+#include "contracts/config/dns.h"
 #include "observe/log/service.h"
 #include "runtime/engine/internal.h"
 #include "contracts/inbound/proxy.h"
@@ -21,6 +23,7 @@ typedef struct owner_state owner_state_t;
 typedef struct binding binding_t;
 typedef struct request request_t;
 enum { BUNDLE_PREPARING, BUNDLE_READY, BUNDLE_ACTIVE, BUNDLE_RETIRING, BUNDLE_ABORTING };
+enum { DNS_RUNTIME_OFF, DNS_RUNTIME_STARTING, DNS_RUNTIME_READY, DNS_RUNTIME_FAILED, DNS_RUNTIME_CLOSING };
 struct solaris_prepared_config {
     atomic_size_t references, external;
     atomic_uint state;
@@ -62,9 +65,13 @@ struct bundle {
     binding_t *bindings;
     solaris_config_listener_info_t *infos;
     solaris_control_view_t *control;
+    solaris_network_snapshot_t *network;
+    solaris_dns_resolver_view_t *dns_view;
+    solaris_dns_binding_t *dns_binding;
+    solaris_dns_lookup_view_t dns_lookup_view;
     size_t owner_count, binding_count, group_count;
     uint64_t base_revision, revision, runtime_generation;
-    int state, detached, retirement_sent;
+    int state, detached, retirement_sent, dns_pending;
     request_t *request;
     solaris_prepared_config_t *prepared;
 };
@@ -83,6 +90,9 @@ struct request {
     solaris_status_t status;
     solaris_error_t error;
     solaris_config_module_set_t *set;
+    solaris_network_snapshot_t *network;
+    solaris_dns_resolver_view_t *dns_view;
+    solaris_dns_lookup_view_t dns_lookup_view;
     solaris_snapshot_ref_t base;
     bundle_t *bundle;
     solaris_prepared_config_t *prepared, *output;
@@ -106,12 +116,29 @@ struct solaris_config_manager {
     solaris_control_completion_t wake;
     int wake_pending, stopping, destroying, progressing;
     uint64_t generation, auth_serial, selection_serial;
+    /* One independent service per runtime generation, never a child of a
+     * bundle. Its returned reference remains valid through the scope-done
+     * control ACK, including when the service has become inert. */
+    solaris_executor_t *dns_owner;
+    solaris_scope_t dns_scope;
+    solaris_dns_service_t *dns_service;
+    solaris_network_snapshot_t *dns_network;
+    solaris_deferred_t dns_close;
+    solaris_control_completion_t dns_ready, dns_done;
+    solaris_status_t dns_status;
+    uint64_t dns_network_revision;
+    int dns_state; /* control-only */
+    int dns_initialized; /* service owner only */
+    int dns_close_pending; /* manager mutex */
 };
 static void manager_progress(solaris_config_manager_t *manager);
 static void manager_schedule(solaris_config_manager_t *manager);
 static void bundle_abort(bundle_t *bundle);
 static void owner_action(void *context);
 static void prepare_start_owners(request_t *request);
+static void owner_prepare(void *context, solaris_status_t status);
+static void dns_prepare_bundle(bundle_t *bundle);
+static void dns_schedule_close(solaris_config_manager_t *manager);
 static void manager_retain(solaris_config_manager_t *manager)
 {
     atomic_fetch_add_explicit(&manager->references, 1, memory_order_relaxed);
@@ -381,6 +408,29 @@ static solaris_status_t acquire_plan(void *context, solaris_executor_t *owner, u
 {
     return solaris_config_admission_acquire_plan(context, owner, target, plan, capabilities);
 }
+static solaris_status_t admission_resolve(void *context, solaris_executor_t *owner,
+    const solaris_address_t *target, uint64_t timeout_ms, solaris_resolve_fn callback, void *user, void **request)
+{
+    solaris_config_admission_t *admission = context;
+    bundle_t *bundle = admission->bundle;
+    *request = NULL;
+    if (!bundle->dns_binding) return SOLARIS_ENOTSUP;
+    uint64_t now = solaris_executor_now_ns(owner);
+    if (!timeout_ms) return SOLARIS_ETIMEDOUT;
+    if (timeout_ms > (UINT64_MAX - now) / UINT64_C(1000000)) return SOLARIS_EOVERFLOW;
+    solaris_dns_lookup_view_t view = bundle->dns_lookup_view;
+    view.role = SOLARIS_DNS_ROUTE_TARGET;
+    view.config_revision = bundle->revision;
+    view.selection_revision = admission->control->revision;
+    solaris_dns_lookup_t lookup = solaris_dns_binding_lookup(bundle->dns_binding);
+    return lookup.start(lookup.context, owner, &view, target, now + timeout_ms * UINT64_C(1000000), callback, user, request);
+}
+static void admission_cancel_resolve(void *context, void *request)
+{
+    solaris_config_admission_t *admission = context;
+    solaris_dns_lookup_t lookup = solaris_dns_binding_lookup(admission->bundle->dns_binding);
+    lookup.cancel(lookup.context, request);
+}
 static solaris_status_t route(void *context, solaris_executor_t *owner, const solaris_inbound_request_t *request,
                               solaris_route_options_t *out)
 {
@@ -418,6 +468,15 @@ static solaris_status_t route(void *context, solaris_executor_t *owner, const so
     out->timeout_ms = 10000;
     out->metadata.config_revision = bundle->revision;
     out->metadata.selection_revision = admission->control->revision;
+    if (bundle->dns_binding) {
+        out->resolve = admission_resolve;
+        out->cancel_resolve = admission_cancel_resolve;
+        out->dial_lookup = solaris_dns_binding_lookup(bundle->dns_binding);
+        out->dial_lookup_view = bundle->dns_lookup_view;
+        out->dial_lookup_view.role = SOLARIS_DNS_DIRECT_TARGET;
+        out->dial_lookup_view.config_revision = bundle->revision;
+        out->dial_lookup_view.selection_revision = admission->control->revision;
+    }
     return SOLARIS_OK;
 }
 #endif
@@ -569,6 +628,22 @@ static void owner_prepare(void *context, solaris_status_t status)
                                                    .context = owner};
         options.services.replay = bundle->manager->replay;
         options.services.dialer.traffic = bundle->manager->traffic;
+        if (bundle->network) {
+            solaris_network_snapshot_info_t info;
+            (void)solaris_network_snapshot_get_info(bundle->network, &info);
+            const solaris_socket_policy_t *policy = solaris_network_snapshot_policy(bundle->network);
+            if (policy) options.services.dialer.async_policy = *policy;
+            options.services.dialer.require_lookup = (int)info.strict_dns;
+            options.services.dialer.lookup_view.network_revision = info.network_revision;
+            options.services.dialer.lookup_view.resolver_revision = info.resolver_revision;
+            options.services.dialer.lookup_view.config_revision = bundle->revision;
+            options.services.dialer.network_view_present = 1;
+            options.services.dialer.allowed_families = (info.ipv4_available ? 1u : 0u) | (info.ipv6_available ? 2u : 0u);
+        }
+        if (bundle->dns_binding) {
+            options.services.dialer.lookup = solaris_dns_binding_lookup(bundle->dns_binding);
+            options.services.dialer.lookup_view = bundle->dns_lookup_view;
+        }
         options.services.diagnostic = solaris_log_service_diagnostic(bundle->manager->log);
         status = solaris_config_worker_create(&options, &owner->worker, &owner->error);
     }
@@ -625,6 +700,158 @@ static void owner_prepare(void *context, solaris_status_t status)
         rc = solaris_runtime_control_post(bundle->manager->engine, &owner->done_node);
         assert(rc == SOLARIS_OK);
         (void)rc;
+    }
+}
+static void post_bundle_owners(bundle_t *bundle)
+{
+    for (size_t i = 0; i < bundle->owner_count; ++i) {
+        owner_state_t *owner = &bundle->owners[i];
+        solaris_status_t rc = solaris_executor_post(owner->owner, owner_prepare, owner);
+        if (rc != SOLARIS_OK) {
+            owner->ready = owner->drained = 1;
+            owner->status = rc;
+        }
+    }
+}
+static void dns_finish_waiter(solaris_config_manager_t *manager, solaris_status_t status)
+{
+    request_t *request = manager->preparing;
+    bundle_t *bundle = request ? request->bundle : NULL;
+    if (!bundle || !bundle->dns_pending) return;
+    bundle->dns_pending = 0;
+    if (request->cancelled || manager->stopping || bundle->state != BUNDLE_PREPARING) status = SOLARIS_ECANCELLED;
+    if (status == SOLARIS_OK)
+        status = solaris_dns_binding_create(manager->dns_service, bundle->dns_view, &bundle->dns_binding);
+    if (status == SOLARIS_OK) post_bundle_owners(bundle);
+    else for (size_t i = 0; i < bundle->owner_count; ++i) {
+        owner_state_t *owner = &bundle->owners[i];
+        owner->ready = owner->drained = 1; owner->status = status;
+        solaris_error_set(&owner->error, status, 0, "DNS runtime preparation failed");
+    }
+    manager_progress(manager);
+}
+static void dns_ready_control(void *context)
+{
+    solaris_config_manager_t *manager = context;
+    if (manager->dns_status != SOLARIS_OK) {
+        /* A rejected service create can still own native/scoped cleanup. Its
+         * independent parent done ACK, not this ready ACK, releases the waiter. */
+        manager->dns_state = DNS_RUNTIME_FAILED;
+        manager_progress(manager);
+        return;
+    }
+    manager->dns_state = manager->stopping ? DNS_RUNTIME_CLOSING : DNS_RUNTIME_READY;
+    dns_finish_waiter(manager, SOLARIS_OK);
+    if (manager->stopping) dns_schedule_close(manager);
+}
+static void dns_done_control(void *context)
+{
+    solaris_config_manager_t *manager = context;
+    solaris_status_t status = manager->dns_status == SOLARIS_OK ? SOLARIS_ECANCELLED : manager->dns_status;
+    solaris_dns_service_release(manager->dns_service); manager->dns_service = NULL;
+    solaris_network_snapshot_release(manager->dns_network); manager->dns_network = NULL;
+    manager->dns_state = DNS_RUNTIME_OFF;
+    dns_finish_waiter(manager, status);
+    manager_progress(manager);
+    manager_release(manager); /* Runtime lifetime, independent of every bundle. */
+}
+static void dns_scope_done(void *context)
+{
+    solaris_config_manager_t *manager = context;
+    manager->dns_initialized = 0;
+    solaris_status_t rc = solaris_runtime_control_post(manager->engine, &manager->dns_done);
+    assert(rc == SOLARIS_OK); (void)rc;
+}
+static void dns_scope_cancelled(void *context)
+{
+    solaris_config_manager_t *manager = context;
+    if (manager->dns_service) (void)solaris_dns_service_close(manager->dns_service);
+}
+static void dns_service_closed(void *context)
+{
+    solaris_config_manager_t *manager = context;
+    /* The service releases its parent reference after this callback. */
+    solaris_scope_cancel(&manager->dns_scope);
+}
+static void dns_start_owner(void *context, solaris_status_t status)
+{
+    solaris_config_manager_t *manager = context;
+    if (status == SOLARIS_OK)
+        status = solaris_scope_init(&manager->dns_scope, manager->dns_owner,
+            dns_scope_cancelled, dns_scope_done, manager);
+    if (status == SOLARIS_OK) {
+        manager->dns_initialized = 1;
+        solaris_dns_service_options_t options; solaris_dns_service_options_init(&options);
+        options.owner = manager->dns_owner; options.budget = manager->budget;
+        options.parent_scope = &manager->dns_scope; options.initial_network_revision = manager->dns_network_revision;
+        options.context = manager; options.on_close = dns_service_closed;
+        options.dialer.traffic = manager->traffic;
+        options.dialer.lookup_view.role = SOLARIS_DNS_BOOTSTRAP;
+        if (manager->dns_network) {
+            solaris_network_snapshot_info_t network;
+            (void)solaris_network_snapshot_get_info(manager->dns_network, &network);
+            options.dialer.async_policy = *solaris_network_snapshot_policy(manager->dns_network);
+            options.dialer.require_lookup = (int)network.strict_dns;
+            options.dialer.network_view_present = 1;
+            options.dialer.allowed_families = (network.ipv4_available ? 1u : 0u) | (network.ipv6_available ? 2u : 0u);
+        }
+        /* Upstreams are numeric. Do not install the DNS binding into its own
+         * transport dialer, or proxy-server/bootstrap lookup could recurse. */
+        status = solaris_dns_service_create(&options, &manager->dns_service);
+        if (status != SOLARIS_OK) solaris_scope_cancel(&manager->dns_scope);
+    }
+    manager->dns_status = status;
+    solaris_status_t rc = solaris_runtime_control_post(manager->engine, &manager->dns_ready);
+    assert(rc == SOLARIS_OK); (void)rc;
+    if (!manager->dns_initialized) {
+        rc = solaris_runtime_control_post(manager->engine, &manager->dns_done);
+        assert(rc == SOLARIS_OK); (void)rc;
+    }
+}
+static void dns_close_owner(void *context)
+{
+    solaris_config_manager_t *manager = context;
+    if (manager->dns_initialized) solaris_scope_cancel(&manager->dns_scope);
+    uv_mutex_lock(&manager->mutex); manager->dns_close_pending = 0; uv_mutex_unlock(&manager->mutex);
+    manager_schedule(manager);
+    manager_release(manager);
+}
+static void dns_schedule_close(solaris_config_manager_t *manager)
+{
+    if (manager->dns_state == DNS_RUNTIME_OFF) return;
+    manager->dns_state = DNS_RUNTIME_CLOSING;
+    uv_mutex_lock(&manager->mutex);
+    if (!manager->dns_close_pending) {
+        manager->dns_close_pending = 1; manager_retain(manager);
+        solaris_status_t rc = solaris_executor_defer(manager->dns_owner, &manager->dns_close);
+        assert(rc == SOLARIS_OK); (void)rc;
+    }
+    uv_mutex_unlock(&manager->mutex);
+}
+static void dns_prepare_bundle(bundle_t *bundle)
+{
+    solaris_config_manager_t *manager = bundle->manager;
+    bundle->dns_pending = 1;
+    if (manager->dns_state == DNS_RUNTIME_READY) {
+        dns_finish_waiter(manager, bundle->dns_lookup_view.network_revision == manager->dns_network_revision ?
+            SOLARIS_OK : SOLARIS_ENETWORK_CHANGED);
+        return;
+    }
+    if (manager->dns_state != DNS_RUNTIME_OFF) {
+        dns_finish_waiter(manager, SOLARIS_ECLOSED);
+        return;
+    }
+    manager->dns_state = DNS_RUNTIME_STARTING;
+    manager->dns_owner = bundle->owners[0].owner;
+    manager->dns_network_revision = bundle->dns_lookup_view.network_revision;
+    manager->dns_network = bundle->network; solaris_network_snapshot_retain(manager->dns_network);
+    manager_retain(manager);
+    solaris_status_t rc = solaris_executor_post(manager->dns_owner, dns_start_owner, manager);
+    if (rc != SOLARIS_OK) {
+        solaris_network_snapshot_release(manager->dns_network); manager->dns_network = NULL;
+        manager->dns_state = DNS_RUNTIME_OFF;
+        dns_finish_waiter(manager, rc);
+        manager_release(manager);
     }
 }
 static void owner_action(void *context)
@@ -687,9 +914,12 @@ static void bundle_free(bundle_t *bundle)
     }
     solaris_config_module_set_release(bundle->set);
     solaris_control_view_release(bundle->control);
+    solaris_dns_binding_release(bundle->dns_binding);
+    solaris_dns_resolver_view_release(bundle->dns_view);
     solaris_memory_free(bundle->infos);
     solaris_memory_free(bundle->bindings);
     solaris_memory_free(bundle->owners);
+    solaris_network_snapshot_release(bundle->network);
     solaris_memory_free(bundle);
 }
 static void finish_request(request_t *request, solaris_status_t status)
@@ -725,7 +955,7 @@ static void manager_progress(solaris_config_manager_t *manager)
     manager->progressing = 1;
     for (bundle_t *bundle = manager->bundles, *next; bundle; bundle = next) {
         next = bundle->next;
-        int ready = 1, drained = 1;
+        int ready = !bundle->dns_pending, drained = !bundle->dns_pending;
         for (size_t i = 0; i < bundle->owner_count; ++i) {
             ready &= bundle->owners[i].ready;
             drained &= bundle->owners[i].drained;
@@ -787,11 +1017,67 @@ static void manager_progress(solaris_config_manager_t *manager)
     }
     manager->progressing = 0;
 }
+static solaris_status_t prepare_dns_view(request_t *request)
+{
+    const solaris_config_dns_t *config = solaris_config_dns(request->image);
+    solaris_network_snapshot_info_t network = {0};
+    if (request->network) (void)solaris_network_snapshot_get_info(request->network, &network);
+    if (!config && !network.strict_dns) return SOLARIS_OK;
+    if (config && config->enabled && config->use_system_hosts && !request->network)
+        return solaris_error_set(&request->error, SOLARIS_ENOTSUP, 0, "DNS system hosts requires an explicit host network snapshot");
+    const solaris_socket_policy_t *policy = solaris_network_snapshot_policy(request->network);
+    if (network.strict_dns && (!policy || !policy->start))
+        return solaris_error_set(&request->error, SOLARIS_ENOTSUP, 0, "strict DNS requires an explicit socket protection policy");
+    size_t system_count = 0, server_count = 0;
+    const solaris_hosts_entry_t *system = NULL;
+    if (request->network && (!config || config->use_system_hosts))
+        system = solaris_network_snapshot_system_hosts(request->network, &system_count);
+    const solaris_address_t *servers = solaris_network_snapshot_dns_servers(request->network, &server_count);
+    solaris_hosts_t *hosts = NULL; solaris_hosts_diagnostic_t diagnostic;
+    solaris_status_t rc = solaris_hosts_build(request->manager->budget, config ? config->hosts : NULL,
+        config ? config->host_count : 0u, system, system_count, NULL, &hosts, &diagnostic);
+    if (rc != SOLARIS_OK) return solaris_error_set(&request->error, rc, 0, diagnostic.message);
+    solaris_dns_resolver_view_options_t options; solaris_dns_resolver_view_options_init(&options);
+    options.hosts = hosts;
+    options.resolver_revision = request->operation_id;
+    options.network_revision = request->network ? network.network_revision : 1u;
+    options.wire_use_hosts = config ? config->use_hosts : 1u;
+    options.ipv6 = config ? config->ipv6 : network.ipv6_available;
+    if (request->network && !network.ipv6_available) options.ipv6 = 0u;
+    if (config) options.ipv6_wait_ms = config->ipv6_wait_ms;
+    options.allow_system_lookup = !network.strict_dns && (!config || !config->enabled);
+    solaris_dns_upstream_t system_upstreams[SOLARIS_DNS_MAX_UPSTREAMS];
+    if (server_count > SOLARIS_DNS_MAX_UPSTREAMS) rc = SOLARIS_EOVERFLOW;
+    for (size_t i = 0; rc == SOLARIS_OK && i < server_count; ++i)
+        system_upstreams[i] = (solaris_dns_upstream_t){.id = i + 1u, .address = servers[i], .transport = SOLARIS_DNS_TRANSPORT_UDP};
+    for (size_t role = 0; rc == SOLARIS_OK && role < SOLARIS_DNS_ROLE_COUNT; ++role) {
+        if (config && config->enabled && config->upstream_count[role]) {
+            options.role[role].upstreams = config->upstreams[role];
+            options.role[role].upstream_count = config->upstream_count[role];
+            options.role[role].upstream_set_id = config->upstream_set_id[role];
+        } else if (server_count) {
+            options.role[role].upstreams = system_upstreams;
+            options.role[role].upstream_count = server_count;
+            options.role[role].upstream_set_id = UINT64_MAX - role;
+        }
+        if (network.strict_dns && !options.role[role].upstream_count) rc = SOLARIS_ENOTSUP;
+    }
+    if (rc == SOLARIS_OK)
+        rc = solaris_dns_resolver_view_create(request->manager->budget, &options, &request->dns_view);
+    solaris_hosts_release(hosts);
+    if (rc != SOLARIS_OK)
+        return solaris_error_set(&request->error, rc, 0, "DNS role has no supported protected numeric upstream path");
+    request->dns_lookup_view = (solaris_dns_lookup_view_t){.role = SOLARIS_DNS_DIRECT_TARGET,
+        .config_revision = request->base.revision + 1u, .resolver_revision = options.resolver_revision,
+        .network_revision = options.network_revision};
+    return SOLARIS_OK;
+}
 static void prepare_work(uv_work_t *work)
 {
     request_t *request = work->data;
     request->status = solaris_config_module_set_create(request->manager->budget, request->image, request->trust,
                                                        request->trust_length, &request->set, &request->error);
+    if (request->status == SOLARIS_OK) request->status = prepare_dns_view(request);
 }
 static void prepare_after_work(uv_work_t *work, int status)
 {
@@ -833,6 +1119,9 @@ static void prepare_start_owners(request_t *request)
     }
     memset(bundle, 0, sizeof(*bundle));
     bundle->manager = manager;
+    bundle->network = request->network; request->network = NULL;
+    bundle->dns_view = request->dns_view; request->dns_view = NULL;
+    bundle->dns_lookup_view = request->dns_lookup_view;
     atomic_init(&bundle->references, 1);
     bundle->owner_count = owner_count;
     bundle->binding_count = listener_count;
@@ -955,21 +1244,18 @@ static void prepare_start_owners(request_t *request)
     /* Base/auth metadata is now copied. Do not keep the old runtime lease
      * through rollback callbacks: stop must be able to drain that old bundle. */
     solaris_snapshot_ref_release(&request->base);
-    for (size_t i = 0; i < owner_count; ++i) {
-        owner_state_t *owner = &bundle->owners[i];
-        rc = solaris_executor_post(owner->owner, owner_prepare, owner);
-        if (rc != SOLARIS_OK) {
-            owner->ready = owner->drained = 1;
-            owner->status = rc;
-        }
-    }
+    if (bundle->dns_view) dns_prepare_bundle(bundle);
+    else post_bundle_owners(bundle);
     manager_progress(manager);
     return;
 failed:
     solaris_control_view_release(bundle->control);
+    solaris_dns_binding_release(bundle->dns_binding);
+    solaris_dns_resolver_view_release(bundle->dns_view);
     solaris_memory_free(bundle->infos);
     solaris_memory_free(bundle->bindings);
     solaris_memory_free(bundle->owners);
+    solaris_network_snapshot_release(bundle->network);
     solaris_memory_free(bundle);
     solaris_snapshot_ref_release(&request->base);
     finish_request(request, rc);
@@ -992,6 +1278,7 @@ static solaris_status_t prepare_start(void *context, solaris_engine_t *engine, s
     manager->generation = runtime.generation;
     manager->preparing = request;
     request->operation = operation;
+    request->network = solaris_runtime_network_acquire(engine);
     request->work.data = request;
     int rc = uv_queue_work(solaris_runtime_control_loop(engine), &request->work, prepare_work, prepare_after_work);
     if (rc != 0) {
@@ -1018,7 +1305,16 @@ static solaris_status_t commit_publish(void *context, uint64_t *revision)
     if (manager->selection_serial == UINT64_MAX)
         return SOLARIS_EOVERFLOW;
     bundle_t *old = action->previous.context;
+    if (action->previous.revision != bundle->base_revision)
+        return SOLARIS_EAGAIN;
     uv_mutex_lock(&manager->policy_mutex);
+    size_t rule_count;
+    (void)solaris_config_rules(solaris_config_module_set_image(bundle->set), &rule_count);
+    if (old && old->control->mode == SOLARIS_MODE_RULE && !rule_count) {
+        uv_mutex_unlock(&manager->policy_mutex);
+        return solaris_error_set(&request->error, SOLARIS_EINVAL, 0,
+            "preserving rule mode requires an explicit FINAL rule in the candidate");
+    }
     solaris_control_view_migrate(bundle->control, solaris_config_module_set_image(bundle->set),
                                  old ? old->control : NULL, old ? solaris_config_module_set_image(old->set) : NULL,
                                  manager->selection_serial + 1);
@@ -1071,8 +1367,9 @@ static solaris_status_t commit_start(void *context, solaris_engine_t *engine, so
         manager_schedule(manager);
     } else {
         request->status = rc;
-        solaris_error_set(&request->error, rc, 0,
-                          rc == SOLARIS_EAGAIN ? "prepared configuration base revision is stale" : NULL);
+        if (request->error.code != rc)
+            solaris_error_set(&request->error, rc, 0,
+                              rc == SOLARIS_EAGAIN ? "prepared configuration base revision is stale" : NULL);
         bundle_abort(bundle);
         manager_progress(manager);
     }
@@ -1123,6 +1420,8 @@ static void request_dispose(void *context)
         solaris_prepared_config_release(request->prepared);
     solaris_snapshot_ref_release(&request->base);
     solaris_config_module_set_release(request->set);
+    solaris_dns_resolver_view_release(request->dns_view);
+    solaris_network_snapshot_release(request->network);
     solaris_config_release(request->image);
     if (request->trust) {
         for (size_t i = 0; i < request->trust_length; ++i)
@@ -1138,6 +1437,7 @@ static solaris_status_t manager_stop(void *context, int destroy)
     solaris_config_manager_t *manager = context;
     manager->stopping = 1;
     manager->destroying |= destroy;
+    dns_schedule_close(manager);
     solaris_snapshot_ref_t old = {0};
     uv_mutex_lock(&manager->policy_mutex);
     solaris_status_t rc = solaris_publication_acquire(manager->publication, &old);
@@ -1169,15 +1469,16 @@ static int manager_drained(void *context)
     solaris_config_manager_t *manager = context;
     manager_progress(manager);
     uv_mutex_lock(&manager->mutex);
-    int queued = manager->wake_pending;
+    int queued = manager->wake_pending || manager->dns_close_pending;
     uv_mutex_unlock(&manager->mutex);
-    return !manager->bundles && !manager->preparing && !queued && solaris_config_slots_drained(manager->slots) &&
+    return !manager->bundles && !manager->preparing && !queued && manager->dns_state == DNS_RUNTIME_OFF &&
+           solaris_config_slots_drained(manager->slots) &&
            solaris_tracker_drained(manager->tracker) && solaris_log_service_drained(manager->log);
 }
 static void manager_destroy(void *context)
 {
     solaris_config_manager_t *manager = context;
-    assert(!manager->bundles && !manager->preparing);
+    assert(!manager->bundles && !manager->preparing && manager->dns_state == DNS_RUNTIME_OFF && !manager->dns_service);
     uv_mutex_lock(&manager->mutex);
     manager->engine = NULL;
     manager->wake_pending = 0;
@@ -1227,6 +1528,9 @@ solaris_status_t solaris_config_manager_ensure(solaris_engine_t *engine, solaris
     manager->engine = engine;
     manager->budget = solaris_runtime_budget(engine);
     manager->wake = (solaris_control_completion_t){.run = manager_wake, .context = manager};
+    manager->dns_ready = (solaris_control_completion_t){.run = dns_ready_control, .context = manager};
+    manager->dns_done = (solaris_control_completion_t){.run = dns_done_control, .context = manager};
+    manager->dns_close = (solaris_deferred_t){.run = dns_close_owner, .context = manager};
     solaris_status_t rc = solaris_publication_create(manager->budget, &manager->publication);
     if (rc == SOLARIS_OK)
         rc = solaris_config_slots_create(manager->budget, slot_accept, manager, &manager->slots);
@@ -1545,9 +1849,14 @@ static solaris_status_t control_start(void *context, solaris_engine_t *engine, s
         return solaris_error_set(&request->error, rc, 0, "active configuration revision does not match");
     solaris_control_view_t *current = request->admission->control;
     int unchanged = 0;
-    if (request->kind == SOLARIS_OPERATION_SET_MODE)
+    if (request->kind == SOLARIS_OPERATION_SET_MODE) {
+        size_t rule_count;
+        (void)solaris_config_rules(solaris_config_module_set_image(request->admission->bundle->set), &rule_count);
+        if (request->mode == SOLARIS_MODE_RULE && !rule_count)
+            return solaris_error_set(&request->error, SOLARIS_EINVAL, 0,
+                "rule mode requires a configuration with an explicit FINAL rule");
         unchanged = current->mode == request->mode;
-    else {
+    } else {
         size_t count;
         const solaris_config_group_t *groups =
             solaris_config_groups(solaris_config_module_set_image(request->admission->bundle->set), &count);

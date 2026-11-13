@@ -1,7 +1,7 @@
 # 测试与验收规范
 
-状态：独立内核验收定义，2026-11-13 按 Solaris Conf 方向调整；不表示新测试已经运行。各阶段状态只在 [开发计划](DEVELOPMENT_PLAN.md) 维护。
-迁移期间现有 YAML/参考测试的注册保持原状，CFG-04 在原生替代覆盖完成后调整默认门禁；本次仅修改规范。
+状态：独立内核验收定义；当前默认配置门禁使用 Solaris Conf v1。各阶段验证结果只在 [开发计划](DEVELOPMENT_PLAN.md) 维护。
+YAML 参考工具已隔离至 tests/archive/yaml；原生测试不依赖该目录。
 
 ## 1. 证据分类
 
@@ -58,7 +58,7 @@
 | U03 | 首次建关联多包并发：只 open 一次，队列受限，完成一次 | M1 |
 | U04 | association 固定 worker；目标改变不漂移，N 改变不直接重哈希存量 | M1 |
 | U05 | 首包 Direct/次包本应 Proxy 及反向顺序：遵循首次选路固定 | M2 |
-| U06 | native UDP、SS/AnyTLS UoT、VLESS XUDP：同一 association/公共层不增加封装特判 | M1 内部全部路径；M2 YAML/入站接入 |
+| U06 | native UDP、SS/AnyTLS UoT、VLESS XUDP：同一 association/公共层不增加封装特判 | M1 内部全部路径；原生配置/入站接入 |
 | U07 | Fake-IP、hosts、多域名同 IP/端口：租约稳定、歧义隔离、正确恢复 | M3 |
 | U08 | 备用远端 IP/端口回复：真实 peer 保留，映射与过滤分别检查 | M1，平台验证在 M3 |
 | U09 | 空 payload、IPv4/IPv6 校验和、MTU、超长/分片策略 | datagram 在 M1，TUN codec 在 M3 |
@@ -78,12 +78,16 @@ Solaris Conf v1 的预期由 [原生配置规范](CONFIGURATION_AND_SDK.md) 定�
 - 等价显式样本产生相同 owned 模型；C SDK 和运行时沿用同一校验，不因文本入口不同改变取消、更新或旧流语义。
 - 安装后的 `.conf` 宿主完成真实代理、控制/观测与失败/成功更新；DNS/TUN/平台新段按其实际实现单独验收。
 
-原生 parser 加独立 fuzz 入口和人工构造的边界语料；预期不能全由待测实现自己生成。迁移可使用显式等价的旧 YAML 样本检查已有模型回归，
+原生 parser 使用独立 fuzz 入口和人工构造的边界语料；预期不能全由待测实现自己生成。迁移可使用显式等价的旧 YAML 样本检查已有模型回归，
 但不要求复制 YAML 隐式类型、mihomo 默认值或 Surge 的管理指令。新格式错误不能触发隐式旧格式回退。
 
 mihomo、Surge 或其他实现的对照仅在需要研究或核验差异时使用，并固定版本、输入和观察点。
-已有 mihomo 完整加载器与 YAML 差分结果保留为 M2 历史证据；CFG-04 完成后移出原生默认门禁，不能改标签冒充 `.conf` 验收。
+已有 mihomo 完整加载器与 YAML 差分结果保留为 M2 历史证据，已移出原生默认门禁，不能改标签冒充 `.conf` 验收。
 协议线格式、独立对端互通、资源与生命周期测试继续保留；外部格式导入器若将来单独交付，则维护自身明确子集的兼容测试。
+
+当前对应测试：config_compile_contract、config_bounds_contract、config_dns_contract、config_native_contract、config_sdk_contract；
+控制/事务检查包含 rule 模式的 FINAL 约束及提交失败保留旧配置。runtime_*、route_acceptance、config_host 与 installed_consumer 均已使用原生输入。
+`solaris_config_fuzz` 使用 tests/fuzz/config-seeds/*.conf 与 config.dict；默认 CI 不构建 YAML/mihomo 参考程序。
 
 ## 6. 协议与解析器
 

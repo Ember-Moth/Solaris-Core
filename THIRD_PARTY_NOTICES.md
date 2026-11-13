@@ -107,28 +107,12 @@ the Solaris DLL ABI. Parser behavior and the downloaded upstream sources are unc
 
 https://github.com/nodejs/llhttp
 
-## libyaml YAML parser
+## Historical YAML test tools
 
-The offline configuration compiler links libyaml 0.2.5, commit
-`2c891fc7a770e8ba2fec34fc6b545c672beb37e6`, under its MIT license.
-The archive checksum is locked in `dependencies/lock.json`. Solaris uses
-private symbol prefixes and a per-compilation bounded allocator through
-forced include headers; upstream sources are fetched without edits.
-The upstream `License` is installed in `share/Solaris/licenses/libyaml/`.
-
-https://github.com/yaml/libyaml
-
-The independent decoder fixtures in `tests/support/config/reference/` pin
-`go.yaml.in/yaml/v3 v3.0.5`, the YAML dependency of the fixed mihomo reference.
-Its upstream source uses MIT and Apache licenses; the module checksums remain
-in `go.sum`. This helper is test-only and is not linked into or installed with
-the Solaris SDK.
-
-The full configuration oracle in `tests/support/config/reference/full/` uses
-the GPLv3-licensed fixed mihomo revision recorded in `dependencies/lock.json`.
-Its module checksums and original source hashes are verified before making a
-private build copy. Test bridges expose existing address/metadata/rule helpers
-and observe the effective AnyTLS timer argument without changing loader or
-matching behavior. The build emits hashes for these bridges and the resulting
-observation overlay. This reference executable is not linked into or installed
-with the Solaris SDK.
+The former libyaml compiler and private shim are no longer built or shipped.
+Historical decoder/full-loader comparison tools are isolated in
+`tests/archive/yaml/`, with their original module locks, overlay checksums and
+`dependencies.json`. They are not built, tested or installed by the native
+configuration targets. The yaml/v3 dependency uses MIT/Apache licenses and the
+mihomo reference is GPLv3. Their historical evidence applies to the pre-Conf
+implementation, not the current Solaris Conf parser.

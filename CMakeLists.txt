@@ -115,6 +115,11 @@ if(SOLARIS_BUILD_TESTS AND BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
     target_link_libraries(solaris_lifecycle_tests PRIVATE solaris_test_core)
     add_test(NAME lifecycle_contract COMMAND solaris_lifecycle_tests)
     set_tests_properties(sdk_smoke lifecycle_contract PROPERTIES TIMEOUT 30)
+    add_executable(solaris_platform_sdk_tests tests/sdk/platform.c)
+    solaris_configure_target(solaris_platform_sdk_tests)
+    target_link_libraries(solaris_platform_sdk_tests PRIVATE Solaris::core)
+    add_test(NAME platform_sdk_contract COMMAND solaris_platform_sdk_tests)
+    set_tests_properties(platform_sdk_contract PROPERTIES TIMEOUT 30 LABELS "m3;M3-C02;M3-L02;M3-B01")
     add_executable(solaris_memory_alignment_tests tests/contracts/runtime/alignment.c)
     solaris_configure_target(solaris_memory_alignment_tests)
     target_include_directories(solaris_memory_alignment_tests PRIVATE src)
@@ -146,6 +151,12 @@ if(SOLARIS_BUILD_TESTS AND BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
     add_test(NAME engine_hooks_contract COMMAND solaris_engine_hooks_tests)
     set_tests_properties(engine_hooks_contract PROPERTIES TIMEOUT 30)
     if(SOLARIS_ENABLE_DIRECT AND SOLARIS_ENABLE_BLOCK)
+        add_executable(solaris_config_dns_tests tests/contracts/config/dns.c)
+        solaris_configure_target(solaris_config_dns_tests)
+        target_include_directories(solaris_config_dns_tests PRIVATE src tests)
+        target_link_libraries(solaris_config_dns_tests PRIVATE solaris_test_core)
+        add_test(NAME config_dns_contract COMMAND solaris_config_dns_tests)
+        set_tests_properties(config_dns_contract PROPERTIES TIMEOUT 60 LABELS "m3;M3-C01;M3-C02")
         add_executable(solaris_config_bounds_tests tests/contracts/config/bounds.c)
         solaris_configure_target(solaris_config_bounds_tests)
         target_link_libraries(solaris_config_bounds_tests PRIVATE Solaris::core)
@@ -164,6 +175,52 @@ if(SOLARIS_BUILD_TESTS AND BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
         add_test(NAME config_modules_contract COMMAND solaris_config_modules_tests)
         set_tests_properties(config_modules_contract PROPERTIES TIMEOUT 30)
     endif()
+    foreach(m3_case IN ITEMS dns_lookup dns_wire dns_cache hosts_snapshot fakeip_pool stream_bridge socket_preparation socket_policy_io)
+        if(m3_case STREQUAL "dns_lookup")
+            set(m3_source tests/contracts/dns/lookup.c)
+        elseif(m3_case STREQUAL "dns_wire")
+            set(m3_source tests/contracts/dns/wire.c)
+        elseif(m3_case STREQUAL "dns_cache")
+            set(m3_source tests/contracts/dns/cache.c)
+        elseif(m3_case STREQUAL "socket_preparation")
+            set(m3_source tests/contracts/transport/socket_preparation.c)
+        elseif(m3_case STREQUAL "socket_policy_io")
+            set(m3_source tests/contracts/transport/socket_policy_io.c)
+        elseif(m3_case STREQUAL "hosts_snapshot")
+            set(m3_source tests/contracts/dns/hosts.c)
+        elseif(m3_case STREQUAL "fakeip_pool")
+            set(m3_source tests/contracts/dns/fakeip.c)
+        else()
+            set(m3_source tests/contracts/transport/bridge.c)
+        endif()
+        add_executable(solaris_${m3_case}_tests ${m3_source})
+        solaris_configure_target(solaris_${m3_case}_tests)
+        target_include_directories(solaris_${m3_case}_tests PRIVATE src tests)
+        target_link_libraries(solaris_${m3_case}_tests PRIVATE solaris_test_core)
+        add_test(NAME ${m3_case}_contract COMMAND solaris_${m3_case}_tests)
+        set_tests_properties(${m3_case}_contract PROPERTIES TIMEOUT 60 LABELS "m3")
+    endforeach()
+    add_executable(solaris_dns_exchange_tests tests/contracts/dns/exchange.c)
+    solaris_configure_target(solaris_dns_exchange_tests)
+    target_include_directories(solaris_dns_exchange_tests PRIVATE src tests "${PROJECT_BINARY_DIR}/generated")
+    target_link_libraries(solaris_dns_exchange_tests PRIVATE solaris_test_core)
+    add_test(NAME dns_exchange_contract COMMAND "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/support/dns/exchange.py" "$<TARGET_FILE:solaris_dns_exchange_tests>")
+    set_tests_properties(dns_exchange_contract PROPERTIES TIMEOUT 120 LABELS "m3;M3-D02;M3-D06;M3-L03")
+    set_property(TEST dns_cache_contract APPEND PROPERTY LABELS "M3-D03;M3-C02")
+    set_property(TEST socket_preparation_contract socket_policy_io_contract APPEND PROPERTY LABELS "M3-D06;M3-L02;M3-L03")
+    add_executable(solaris_dns_service_tests tests/contracts/dns/service.c)
+    solaris_configure_target(solaris_dns_service_tests)
+    target_include_directories(solaris_dns_service_tests PRIVATE src tests)
+    target_link_libraries(solaris_dns_service_tests PRIVATE solaris_test_core)
+    add_test(NAME dns_service_contract COMMAND "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/support/dns/service.py" "$<TARGET_FILE:solaris_dns_service_tests>")
+    set_tests_properties(dns_service_contract PROPERTIES TIMEOUT 120 LABELS "m3;M3-D03;M3-D04;M3-D06;M3-L02;M3-L03")
+    set_property(TEST hosts_snapshot_contract APPEND PROPERTY LABELS "M3-D04;M3-C02")
+    set_property(TEST dns_wire_contract APPEND PROPERTY LABELS "M3-D01;M3-C02")
+    set_property(TEST dns_lookup_contract APPEND PROPERTY LABELS "M3-D06;M3-L02")
+    set_property(TEST fakeip_pool_contract APPEND PROPERTY LABELS "M3-F01;M3-F03;M3-F04;M3-C02")
+    set_property(TEST stream_bridge_contract APPEND PROPERTY LABELS "M3-T02;M3-L03;M3-C02")
     add_executable(solaris_route_tests tests/contracts/policy/route.c)
     solaris_configure_target(solaris_route_tests)
     target_include_directories(solaris_route_tests PRIVATE src tests)
@@ -176,56 +233,22 @@ if(SOLARIS_BUILD_TESTS AND BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
     target_link_libraries(solaris_operation_tests PRIVATE solaris_test_core)
     add_test(NAME operation_contract COMMAND solaris_operation_tests)
     set_tests_properties(operation_contract PROPERTIES TIMEOUT 30)
-    if(TARGET solaris_yaml)
-        add_test(NAME yaml_private_symbols COMMAND "${Python3_EXECUTABLE}"
-            "${PROJECT_SOURCE_DIR}/scripts/verify/private_symbols.py"
-            --nm "${CMAKE_NM}" --prefix solaris_private_yaml "$<TARGET_FILE:solaris_yaml>")
-        set_tests_properties(yaml_private_symbols PROPERTIES TIMEOUT 30)
-    endif()
     if("direct" IN_LIST solaris_enabled_modules AND "block" IN_LIST solaris_enabled_modules AND "socks5" IN_LIST solaris_enabled_modules)
         add_executable(solaris_config_compile_tests tests/contracts/config/compile.c)
         solaris_configure_target(solaris_config_compile_tests)
         target_include_directories(solaris_config_compile_tests PRIVATE src tests "${PROJECT_BINARY_DIR}/generated")
         target_link_libraries(solaris_config_compile_tests PRIVATE solaris_test_core)
         add_test(NAME config_compile_contract COMMAND solaris_config_compile_tests
-            "${PROJECT_SOURCE_DIR}/tests/support/config/valid.yaml")
+            "${PROJECT_SOURCE_DIR}/tests/support/config/valid.conf")
         set_tests_properties(config_compile_contract PROPERTIES TIMEOUT 30)
-        find_program(GO_EXECUTABLE go REQUIRED)
-        set(solaris_yaml_reference "${PROJECT_BINARY_DIR}/reference-tools/yaml-reference${CMAKE_EXECUTABLE_SUFFIX}")
-        add_custom_command(OUTPUT "${solaris_yaml_reference}"
-            COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROJECT_BINARY_DIR}/reference-tools"
-            COMMAND "${GO_EXECUTABLE}" build -mod=readonly -trimpath -o "${solaris_yaml_reference}" .
-            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests/support/config/reference"
-            DEPENDS tests/support/config/reference/go.mod tests/support/config/reference/go.sum
-                tests/support/config/reference/main.go VERBATIM)
-        add_custom_target(solaris_yaml_reference ALL DEPENDS "${solaris_yaml_reference}")
-        add_test(NAME config_differential_contract COMMAND "${Python3_EXECUTABLE}"
-            "${PROJECT_SOURCE_DIR}/tests/support/config/differential.py"
-            "$<TARGET_FILE:solaris_config_compile_tests>" "${solaris_yaml_reference}")
-        set_tests_properties(config_differential_contract PROPERTIES TIMEOUT 30)
         add_executable(solaris_config_dump_tests tests/contracts/config/dump.c)
         solaris_configure_target(solaris_config_dump_tests)
         target_include_directories(solaris_config_dump_tests PRIVATE src tests "${PROJECT_BINARY_DIR}/generated")
         target_link_libraries(solaris_config_dump_tests PRIVATE solaris_test_core)
-        set(solaris_full_reference "${PROJECT_BINARY_DIR}/reference-tools/mihomo-full-reference${CMAKE_EXECUTABLE_SUFFIX}")
-        set(solaris_full_reference_source "${PROJECT_SOURCE_DIR}/tests/support/config/reference/full")
-        add_custom_command(OUTPUT "${solaris_full_reference}"
-            COMMAND "${Python3_EXECUTABLE}" "${solaris_full_reference_source}/build.py"
-                "${solaris_full_reference}" --go "${GO_EXECUTABLE}"
-            DEPENDS "${solaris_full_reference_source}/build.py" "${solaris_full_reference_source}/main.go"
-                "${solaris_full_reference_source}/go.mod" "${solaris_full_reference_source}/go.sum"
-                "${solaris_full_reference_source}/overlay/manifest.json"
-                "${solaris_full_reference_source}/overlay/observer.go.txt"
-                "${solaris_full_reference_source}/overlay/listener.go.txt"
-                "${solaris_full_reference_source}/overlay/tunnel.go.txt"
-                "${solaris_full_reference_source}/overlay/inbound.go.txt"
-            BYPRODUCTS "${solaris_full_reference}-evidence.json" VERBATIM)
-        add_custom_target(solaris_full_config_reference ALL DEPENDS "${solaris_full_reference}")
-        add_test(NAME config_full_differential_contract COMMAND "${Python3_EXECUTABLE}"
-            "${PROJECT_SOURCE_DIR}/tests/support/config/full_differential.py"
-            "$<TARGET_FILE:solaris_config_dump_tests>" "${solaris_full_reference}"
-            --report "${PROJECT_BINARY_DIR}/config-full-differential.json")
-        set_tests_properties(config_full_differential_contract PROPERTIES TIMEOUT 120)
+        add_test(NAME config_native_contract COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/support/config/native.py" "$<TARGET_FILE:solaris_config_dump_tests>"
+            --report "${PROJECT_BINARY_DIR}/config-native.json")
+        set_tests_properties(config_native_contract PROPERTIES TIMEOUT 60 LABELS "cfg;CFG-01;CFG-02")
         add_executable(solaris_config_routing_tests tests/contracts/config/routing.c)
         solaris_configure_target(solaris_config_routing_tests)
         target_include_directories(solaris_config_routing_tests PRIVATE src tests)
@@ -387,8 +410,8 @@ if(SOLARIS_BUILD_TESTS AND BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
                     add_test(NAME config_host_contract COMMAND "${Python3_EXECUTABLE}"
                         "${PROJECT_SOURCE_DIR}/tests/support/config/config_host.py"
                         "$<TARGET_FILE:solaris_config_host>"
-                        "${PROJECT_SOURCE_DIR}/examples/config_host.yaml"
-                        "${PROJECT_SOURCE_DIR}/examples/config_host_reload.yaml")
+                        "${PROJECT_SOURCE_DIR}/examples/config_host.conf"
+                        "${PROJECT_SOURCE_DIR}/examples/config_host_reload.conf")
                     set_tests_properties(config_host_contract PROPERTIES TIMEOUT 90)
                 endif()
             endif()
@@ -833,13 +856,6 @@ if(SOLARIS_BUILD_FUZZERS)
     target_include_directories(solaris_fuzz_core PUBLIC include PRIVATE src "${PROJECT_BINARY_DIR}/generated")
     target_compile_options(solaris_fuzz_core PRIVATE -fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer)
     set(solaris_fuzz_libraries ${SOLARIS_PRIVATE_LIBRARIES})
-    if(TARGET solaris_yaml)
-        solaris_add_yaml_library(solaris_fuzz_yaml)
-        target_compile_options(solaris_fuzz_yaml PRIVATE
-            -fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer)
-        list(REMOVE_ITEM solaris_fuzz_libraries solaris_yaml)
-        list(APPEND solaris_fuzz_libraries solaris_fuzz_yaml)
-    endif()
     if(TARGET solaris_llhttp)
         get_target_property(solaris_llhttp_sources solaris_llhttp SOURCES)
         add_library(solaris_fuzz_llhttp STATIC ${solaris_llhttp_sources})
@@ -890,7 +906,7 @@ if("boringssl" IN_LIST SOLARIS_DEPENDENCIES)
 endif()
 install(FILES THIRD_PARTY_NOTICES.md dependencies/lock.json
     DESTINATION ${CMAKE_INSTALL_DATADIR}/Solaris)
-install(FILES examples/config_host.c examples/config_host.yaml examples/config_host_reload.yaml
+install(FILES examples/config_host.c examples/config_host.conf examples/config_host_reload.conf
     examples/config_host/CMakeLists.txt examples/config_host/README.md
     DESTINATION ${CMAKE_INSTALL_DATADIR}/Solaris/examples/config-host)
 
@@ -906,7 +922,4 @@ endif()
 
 if(TARGET solaris_llhttp)
     install(FILES "${solaris_llhttp_SOURCE_DIR}/LICENSE-MIT" DESTINATION "${CMAKE_INSTALL_DATADIR}/Solaris/licenses/llhttp")
-endif()
-if(TARGET solaris_yaml)
-    install(FILES "${solaris_yaml_SOURCE_DIR}/License" DESTINATION "${CMAKE_INSTALL_DATADIR}/Solaris/licenses/libyaml")
 endif()

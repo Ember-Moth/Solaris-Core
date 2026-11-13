@@ -9,7 +9,7 @@ function(solaris_m2_label acceptance_id)
     endforeach()
 endfunction()
 
-solaris_m2_label(M2-C01 config_differential_contract config_full_differential_contract)
+solaris_m2_label(M2-C01 config_compile_contract config_bounds_contract)
 solaris_m2_label(M2-C02 config_compile_contract config_bounds_contract config_sdk_contract)
 solaris_m2_label(M2-R01 route_contract config_routing_contract route_acceptance_contract)
 solaris_m2_label(M2-R02 config_routing_contract config_control_contract runtime_control_contract
@@ -32,4 +32,4 @@ solaris_m2_label(M2-E01 config_host_contract runtime_proxy_contract runtime_cont
 solaris_m2_label(M2-E02 runtime_protocol_contract runtime_advanced_contract config_compile_contract
     config_sdk_contract installed_consumer)
 solaris_m2_label(M2-B01 installed_consumer sdk_exports module_symbols module_linked_symbols
-    yaml_private_symbols)
+    config_sdk_contract)

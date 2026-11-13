@@ -4,7 +4,7 @@
 `SOLARIS_ENABLE_PROXY_INBOUND`（默认开启）会构建全部三个入口并链接固定版本 llhttp；设为
 `OFF` 后这些源码和 llhttp 依赖均移除。它不依赖 SOCKS5 出站、TLS 或 TUN 模块。
 
-内部入口位于 `src/contracts/inbound/proxy.h`，供内核集成使用。宿主通过公开 YAML 编译和 prepare/commit
+内部入口位于 `src/contracts/inbound/proxy.h`，供内核集成使用。宿主通过公开 Solaris Conf 编译和 prepare/commit
 激活、更新监听，见 [SDK 用法](SDK.md)。HTTP 代理监听本身是明文 TCP；HTTPS 目标通过 CONNECT 隧道访问。
 
 ## 能力与边界
@@ -128,7 +128,7 @@ association 空闲回收不关闭 SOCKS5 控制 TCP；控制连接仍受每入�
   `python3 tests/support/inbound/proxy/websocket.py build/solaris_proxy_inbound_tests --duration 310` 可追加 16 条并发连接的持续心跳验证。
 - `tcp_relay_contract`：成功/失败/取消的 `on_connect` 恰好一次，含回调内关闭和写入排空。
 - `routed_inbound_contract`：detached 接纳/退休、异步首包固定视图、一次本地解析、空闲重建、认证更新、队列满和迟到 DNS 取消。
-- `runtime_proxy_contract`、`runtime_protocol_contract`：从 YAML 经公开 SDK 激活、事务回滚/更新、双 worker 与固定独立协议对端。
+- `runtime_proxy_contract`、`runtime_protocol_contract`：从 `.conf` 经公开 SDK 激活、事务回滚/更新、双 worker 与固定独立协议对端。
 - `llhttp_private_symbols`、`installed_consumer`、模块裁剪检查：私有符号、依赖安装与独立静态/共享消费。
 - `solaris_parser_fuzz` 的 parser id 21：HTTP 请求头、正文和 trailer，parser id 22 覆盖 Upgrade 响应及拒绝正文，均含分配失败；llhttp 本体也参与覆盖率与 ASan/UBSan 插桩。
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Advanced declared YAML combinations through the public SDK and pinned peers."""
+"""Advanced declared Conf combinations through the public SDK and pinned peers."""
 import argparse
 import base64
 from contextlib import ExitStack
@@ -18,12 +18,12 @@ import threading
 import time
 from types import SimpleNamespace
 
-from runtime_proxy import (Runtime, Peer, echo, config, by_name, http_tunnel, socks_tcp,
+from runtime_proxy import (proxy_config, Runtime, Peer, echo, config, by_name, http_tunnel, socks_tcp,
                            udp_control, udp_exchange, assert_echo, address, exact)
 from runtime_control import HeadPeer, probe
 from runtime_protocol import TlsHeadPeer
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from loopback import udp_pair
+from loopback import udp_pair, tcp_udp_pair
 
 UUID = '7b4bb031-41b5-4d1d-b062-1ea0cab957c1'
 PAYLOAD = bytes((i * 17 + 29) & 255 for i in range(65541))
@@ -66,9 +66,19 @@ def keys(peer, kind):
             else (values['Seed'], values['Client']))
 
 
+class Reservations(list):
+    def __init__(self):
+        super().__init__()
+        self.guards = []
+
+
 def reserve(reservations):
-    sock = socket.socket(); sock.bind(('127.0.0.1', 0)); reservations.append(sock)
-    return sock.getsockname()[1]
+    tcp, udp, guard = tcp_udp_pair(socket.AF_INET)
+    reservations.extend((tcp, udp))
+    # Keep IPv6 reserved while the external IPv4 peer is running, so a
+    # dual-stack ephemeral socket cannot claim one of its UDP relay ports.
+    reservations.guards.append(guard)
+    return tcp.getsockname()[1]
 
 
 def launch(binary, path, port, log):
@@ -106,9 +116,9 @@ def xray_cases(xray, cert, key, reservations):
         inbounds.append(inbound)
         for option in (['xtls-rprx-vision', 'xtls-rprx-vision-udp443'] if vision else ['1rtt', '0rtt']):
             node = {'name': 'proxy', 'type': 'vless', 'server': '127.0.0.1', 'port': port,
-                    'uuid': UUID, 'udp': True, 'packet-encoding': 'xudp'}
+                    'uuid': UUID, 'udp-relay': True, 'packet-encoding': 'xudp'}
             if tls:
-                node.update({'tls': True, 'servername': 'localhost'})
+                node.update({'tls': True, 'tls-server-name': 'localhost'})
             if appearance is None:
                 node['encryption'] = 'none'
             else:
@@ -150,7 +160,7 @@ def ss_cases(reservations):
             for uot in [False, True]:
                 for user in ([73, 74] if depth == 1 else [73]):
                     node = {'name': 'proxy', 'type': 'ss', 'server': '127.0.0.1', 'port': ports[0],
-                            'cipher': method, 'password': ':'.join(identities + [key(user)]), 'udp': True}
+                            'encrypt-method': method, 'password': ':'.join(identities + [key(user)]), 'udp-relay': True}
                     if uot:
                         node.update({'udp-over-tcp': True, 'udp-over-tcp-version': 2})
                     cases.append((f'EIH-AES{bits}/depth{depth}/' + ('UoT' if uot else 'native') + f'/user{user}', node, False, None))
@@ -245,10 +255,10 @@ def controlled_empty_cases(runtime, cert, tls_context, udp4, udp6):
     peers = [Peer(controlled_xudp), Peer(lambda conn: controlled_xudp(conn, tls_context))]
     for encrypted, peer in enumerate(peers):
         node = {'name': 'proxy', 'type': 'vless', 'server': '127.0.0.1', 'port': peer.port,
-                'uuid': UUID, 'encryption': 'none', 'packet-encoding': 'xudp', 'udp': True}
+                'uuid': UUID, 'encryption': 'none', 'packet-encoding': 'xudp', 'udp-relay': True}
         if encrypted:
-            node.update({'tls': True, 'servername': 'localhost'})
-        listeners = by_name(runtime.prepare(0, config(18080, 18081, route='proxy') + 'proxies: [' + json.dumps(node) + ']\n', ephemeral=True))
+            node.update({'tls': True, 'tls-server-name': 'localhost'})
+        listeners = by_name(runtime.prepare(0, config(18080, 18081, route='proxy') + proxy_config(node), ephemeral=True))
         runtime.commit(0); runtime.command('R', bytes([0]))
         control, bound = udp_control(listeners['socks']['port'])
         with control, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
@@ -268,7 +278,7 @@ def test(args):
         conn.settimeout(30); echo(conn)
     tcp = Peer(long_echo)
     udp4, udp6, udp443 = DatagramPeer(socket.AF_INET), DatagramPeer(socket.AF_INET6), DatagramPeer(socket.AF_INET)
-    children, logs, runtime, reservations = [], [], None, []
+    children, logs, runtime, reservations = [], [], None, Reservations()
     with tempfile.TemporaryDirectory(prefix='solaris-runtime-advanced-') as directory:
         root = Path(directory); cert, key, cnf = root / 'cert.pem', root / 'key.pem', root / 'cert.cnf'
         cnf.write_text('[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=localhost\n'
@@ -314,13 +324,13 @@ def test(args):
             bad_cases = []
             overflow = dict(shadowsocks[0][1]); part = overflow['password'].split(':')[0]
             overflow['password'] = ':'.join([part] * 10); bad_cases.append((overflow, -1))
-            chacha = dict(overflow); chacha['cipher'] = '2022-blake3-chacha20-poly1305'
+            chacha = dict(overflow); chacha['encrypt-method'] = '2022-blake3-chacha20-poly1305'
             chacha['password'] = ':'.join([base64.b64encode(bytes([85]) * 32).decode()] * 2); bad_cases.append((chacha, -1))
             legacy = dict(shadowsocks[1][1]); legacy.update({'udp-over-tcp': True, 'udp-over-tcp-version': 1}); bad_cases.append((legacy, -3))
             vision_bad = dict(vless[0][1]); vision_bad.update({'encryption': 'none', 'flow': 'xtls-rprx-vision'}); bad_cases.append((vision_bad, -1))
             ws_bad = dict(vless[0][1]); ws_bad['network'] = 'ws'; bad_cases.append((ws_bad, -3))
             for node, expected in bad_cases:
-                runtime.prepare(0, config(18080, 18081, route='proxy') + 'proxies: [' + json.dumps(node) + ']\n', ephemeral=True, expected=expected)
+                runtime.prepare(0, config(18080, 18081, route='proxy') + proxy_config(node), ephemeral=True, expected=expected)
                 assert runtime.command('Q')['revision'] == 0
             control = subprocess.run([args.control, f'127.0.0.1:{control_port}', UUID, f'{udp4.host}:{udp4.port}'],
                                      check=True, capture_output=True, text=True, timeout=5)
@@ -329,8 +339,8 @@ def test(args):
             controlled_empty_cases(runtime, cert, server_tls, udp4, udp6)
             started = time.monotonic()
             for label, node, vision, allow443 in vless + shadowsocks:
-                yaml = config(18080, 18081, route='proxy') + 'proxies: [' + json.dumps(node) + ']\n'
-                listeners = by_name(runtime.prepare(0, yaml, ephemeral=True))
+                conf = config(18080, 18081, route='proxy') + proxy_config(node)
+                listeners = by_name(runtime.prepare(0, conf, ephemeral=True))
                 assert len({item['worker'] for item in listeners.values()}) == 2
                 revision = runtime.commit(0)['revision']; runtime.command('R', bytes([0]))
                 with ExitStack() as stack:
@@ -379,7 +389,7 @@ def test(args):
                 try: child.wait(5)
                 except subprocess.TimeoutExpired: child.kill(); child.wait(5)
             for log in logs: log.close()
-            for sock in reservations: sock.close()
+            for sock in [*reservations, *reservations.guards]: sock.close()
             for peer in (udp4, udp6, udp443): peer.close()
         tcp.check(); secure_tcp.check(); http_head.peer.check(); https_head.peer.check()
         udp4.check(); udp6.check(); udp443.check()

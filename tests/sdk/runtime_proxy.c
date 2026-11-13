@@ -187,7 +187,7 @@ int main(void)
             solaris_diagnostics_t *diagnostics = NULL;
             solaris_config_options_t compile;
             solaris_config_options_init(&compile);
-            compile.source_name = "runtime-integration.yaml";
+            compile.source_name = "runtime-integration.conf";
             status =
                 solaris_config_compile_bytes(payload + 2, length - 2, &compile, &image, &diagnostics, NULL);
             solaris_diagnostics_release(diagnostics);

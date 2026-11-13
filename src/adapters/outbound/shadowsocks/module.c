@@ -23,8 +23,10 @@ static uint32_t capabilities(void *state)
 {
     ss_outbound_t *ss = state;
     if (ss->retired) return 0u;
-    return ss->plugin.carrier.open != NULL && !ss->uot ? SS_CAPS &
-        ~(SOLARIS_OUTBOUND_DATAGRAM | SOLARIS_OUTBOUND_DATAGRAM_DOMAIN | SOLARIS_OUTBOUND_DATAGRAM_MULTI) : SS_CAPS;
+    uint32_t result = SS_CAPS;
+    if (ss->plugin.carrier.open != NULL && !ss->uot)
+        result &= ~(uint32_t)(SOLARIS_OUTBOUND_DATAGRAM | SOLARIS_OUTBOUND_DATAGRAM_DOMAIN | SOLARIS_OUTBOUND_DATAGRAM_MULTI);
+    return result;
 }
 static solaris_status_t open_carrier(void *state, solaris_executor_t *owner,
     const solaris_dialer_options_t *options, const solaris_address_t *destination,

@@ -69,12 +69,12 @@ static void wait_callback(fixture_t *f, solaris_status_t expected)
     CHECK(solaris_engine_flush(f->engine, 5000, NULL) == SOLARIS_OK);
     CHECK(f->status == expected);
 }
-static solaris_prepared_config_t *prepare(fixture_t *f, const char *yaml)
+static solaris_prepared_config_t *prepare(fixture_t *f, const char *conf)
 {
     solaris_config_t *image;
     solaris_diagnostics_t *diagnostics;
     solaris_error_t error;
-    CHECK(solaris_config_compile_bytes(yaml, strlen(yaml), NULL, &image, &diagnostics, &error) == SOLARIS_OK);
+    CHECK(solaris_config_compile_bytes(conf, strlen(conf), NULL, &image, &diagnostics, &error) == SOLARIS_OK);
     solaris_diagnostics_release(diagnostics);
     uint64_t id;
     CHECK(solaris_engine_prepare_config(f->engine, image, NULL, prepared, f, &id, &error) == SOLARIS_OK);
@@ -256,8 +256,19 @@ int main(void)
     uint64_t id;
     CHECK(solaris_engine_start(f.engine, &id, NULL) == SOLARIS_OK);
     CHECK(solaris_engine_flush(f.engine, 5000, NULL) == SOLARIS_OK);
-    const char *first = "mode: rule\nproxies: [{name: a, type: direct}, {name: b, type: reject}]\nproxy-groups: "
-                        "[{name: Choice, type: select, proxies: [a,b,DIRECT]}]\n";
+    const char *first = "[General]\n"
+    "config-version = 1\n"
+    "mode = rule\n"
+    "\n"
+    "[Proxy]\n"
+    "\"a\" = direct\n"
+    "\"b\" = reject\n"
+    "\n"
+    "[Proxy Group]\n"
+    "\"Choice\" = select, \"a\", \"b\", \"DIRECT\"\n"
+    "\n"
+    "[Rule]\n"
+    "FINAL,DIRECT\n";
     uint64_t revision = commit(&f, prepare(&f, first));
     solaris_control_info_t initial;
     solaris_control_snapshot_t *old = snapshot(&f, &initial);
@@ -284,8 +295,19 @@ int main(void)
     CHECK(solaris_engine_set_mode(f.engine, 0, SOLARIS_MODE_RULE, controlled, &f, &rejected, NULL) == SOLARIS_EINVAL &&
           !rejected);
     select_node(&f, revision, choice, choice, SOLARIS_EINVAL);
-    const char *second = "mode: direct\nproxies: [{name: a, type: direct}, {name: b, type: reject}]\nproxy-groups: "
-                         "[{name: Choice, type: select, proxies: [b,a,DIRECT]}]\n";
+    const char *second = "[General]\n"
+    "config-version = 1\n"
+    "mode = direct\n"
+    "\n"
+    "[Proxy]\n"
+    "\"a\" = direct\n"
+    "\"b\" = reject\n"
+    "\n"
+    "[Proxy Group]\n"
+    "\"Choice\" = select, \"b\", \"a\", \"DIRECT\"\n"
+    "\n"
+    "[Rule]\n"
+    "FINAL,DIRECT\n";
     solaris_prepared_config_t *candidate = prepare(&f, second);
     set_mode(&f, revision, SOLARIS_MODE_RULE, SOLARIS_OK);
     select_node(&f, revision, choice, a, SOLARIS_OK);
@@ -297,8 +319,19 @@ int main(void)
     CHECK(info.mode == SOLARIS_MODE_RULE && selected.selected_id == a &&
           selected.selection_reason == SOLARIS_SELECTION_RELOAD_PRESERVED);
     solaris_control_snapshot_release(s);
-    const char *third = "mode: global\nproxies: [{name: b, type: reject}]\nproxy-groups: [{name: Choice, type: select, "
-                        "proxies: [b,DIRECT]}, {name: Added, type: select, proxies: [DIRECT]}]\n";
+    const char *third = "[General]\n"
+    "config-version = 1\n"
+    "mode = global\n"
+    "\n"
+    "[Proxy]\n"
+    "\"b\" = reject\n"
+    "\n"
+    "[Proxy Group]\n"
+    "\"Choice\" = select, \"b\", \"DIRECT\"\n"
+    "\"Added\" = select, \"DIRECT\"\n"
+    "\n"
+    "[Rule]\n"
+    "FINAL,DIRECT\n";
     revision = commit(&f, prepare(&f, third));
     s = snapshot(&f, &info);
     selected = group(s, "Choice");
@@ -321,6 +354,29 @@ int main(void)
     for (size_t i = 0; i < 3; ++i)
         CHECK(!uv_thread_join(&threads[i]));
     CHECK(atomic_load(&readers.reads) > 0);
+    /* No-rule configurations are valid in direct/global mode, but neither a
+     * control change nor a later commit may introduce an implicit rule action. */
+    const char *no_rules = "[General]\nconfig-version=1\nmode=direct\n";
+    set_mode(&f, revision, SOLARIS_MODE_DIRECT, SOLARIS_OK);
+    candidate = prepare(&f, no_rules);
+    set_mode(&f, revision, SOLARIS_MODE_RULE, SOLARIS_OK);
+    CHECK(solaris_engine_commit_config(f.engine, candidate, committed, &f, &id, NULL) == SOLARIS_OK);
+    wait_callback(&f, SOLARIS_EINVAL);
+    CHECK(f.committed == 0);
+    solaris_prepared_config_snapshot_t rejected_candidate;
+    CHECK(solaris_prepared_config_get_snapshot(candidate, &rejected_candidate) == SOLARIS_OK &&
+          rejected_candidate.state == SOLARIS_PREPARED_CLOSED);
+    solaris_prepared_config_release(candidate);
+    s = snapshot(&f, &info);
+    CHECK(info.config_revision == revision && info.mode == SOLARIS_MODE_RULE);
+    solaris_control_snapshot_release(s);
+    set_mode(&f, revision, SOLARIS_MODE_DIRECT, SOLARIS_OK);
+    revision = commit(&f, prepare(&f, no_rules));
+    set_mode(&f, revision, SOLARIS_MODE_RULE, SOLARIS_EINVAL);
+    s = snapshot(&f, &info);
+    CHECK(info.config_revision == revision && info.mode == SOLARIS_MODE_DIRECT);
+    solaris_control_snapshot_release(s);
+    set_mode(&f, revision, SOLARIS_MODE_GLOBAL, SOLARIS_OK);
     CHECK(solaris_engine_stop(f.engine, &id, NULL) == SOLARIS_OK);
     CHECK(solaris_engine_flush(f.engine, 5000, NULL) == SOLARIS_OK);
     CHECK(solaris_engine_destroy(f.engine, NULL) == SOLARIS_OK);

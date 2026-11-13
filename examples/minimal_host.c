@@ -13,7 +13,7 @@ int main(void)
 {
     solaris_engine_options_t options;
     solaris_engine_options_init(&options);
-    solaris_host_t host = {NULL, on_event};
+    solaris_host_t host = {.on_event = on_event};
     solaris_error_t error;
     solaris_engine_t *engine = NULL;
     uint64_t operation_id = 0;

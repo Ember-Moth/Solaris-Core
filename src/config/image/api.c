@@ -1,25 +1,23 @@
-#include "config/image/internal.h"
 #include "api/common/error.h"
-#include <string.h>
-#include <stdlib.h>
+#include "config/image/internal.h"
 #include <errno.h>
+#include <stdlib.h>
+#include <string.h>
 
-void solaris_config_options_init(solaris_config_options_t *o)
-{
+void solaris_config_options_init(solaris_config_options_t *o) {
     if (!o)
         return;
     memset(o, 0, sizeof(*o));
     o->input_limit_bytes = 1048576;
     o->memory_limit_bytes = 16777216;
     o->string_limit_bytes = 65536;
-    o->depth_limit = 64;
+    o->line_limit_bytes = 65536;
     o->node_limit = 65536;
-    o->alias_limit = 16384;
+    o->entry_limit = 16384;
     o->diagnostic_limit = 64;
 }
 static solaris_status_t initialize(cfg_context_t *c, const solaris_config_options_t *input,
-                                   const solaris_runtime_services_t *services, solaris_error_t *error)
-{
+                                   const solaris_runtime_services_t *services, solaris_error_t *error) {
     memset(c, 0, sizeof(*c));
     solaris_config_options_init(&c->options);
     if (input) {
@@ -31,14 +29,14 @@ static solaris_status_t initialize(cfg_context_t *c, const solaris_config_option
         OPTION(input_limit_bytes);
         OPTION(memory_limit_bytes);
         OPTION(string_limit_bytes);
-        OPTION(depth_limit);
+        OPTION(line_limit_bytes);
         OPTION(node_limit);
-        OPTION(alias_limit);
+        OPTION(entry_limit);
         OPTION(diagnostic_limit);
 #undef OPTION
     }
     if (c->options.input_limit_bytes > 67108864 || c->options.string_limit_bytes > 67108864 ||
-        c->options.depth_limit > 256 || c->options.node_limit > 1048576 || c->options.alias_limit > 1048576 ||
+        c->options.line_limit_bytes > 67108864 || c->options.node_limit > 1048576 || c->options.entry_limit > 1048576 ||
         c->options.diagnostic_limit > 1024 || (c->options.source_name && strlen(c->options.source_name) > 511) ||
         (c->options.base_directory && strlen(c->options.base_directory) > 4095))
         return solaris_error_set(error, SOLARIS_EINVAL, 0, "configuration limits or source metadata are invalid");
@@ -77,24 +75,20 @@ static solaris_status_t initialize(cfg_context_t *c, const solaris_config_option
     }
     return SOLARIS_OK;
 }
-static solaris_status_t compile(cfg_context_t *c, const void *bytes, size_t length)
-{
+static solaris_status_t compile(cfg_context_t *c, const void *bytes, size_t length) {
     if (length > c->options.input_limit_bytes) {
         cfg_fail(c, NULL, "$", SOLARIS_EOVERFLOW, "configuration input limit exceeded");
         return c->status;
     }
-    cfg_node_t *raw = cfg_yaml_parse(c, bytes ? bytes : "", length), *root = NULL;
-    if (raw && !c->errors)
-        root = cfg_yaml_expand(c, raw);
+    cfg_node_t *root = cfg_conf_parse(c, bytes ? bytes : "", length);
     if (root && !c->errors)
         cfg_image_compile(c, root);
     if (!root && !c->errors)
-        cfg_fail(c, NULL, "$", SOLARIS_EINVAL, "invalid YAML configuration");
+        cfg_fail(c, NULL, "$", SOLARIS_EINVAL, "invalid Solaris Conf configuration");
     return c->errors ? c->status : SOLARIS_OK;
 }
 static solaris_status_t finish(cfg_context_t *c, solaris_status_t rc, solaris_config_t **out,
-                               solaris_diagnostics_t **diagnostics, solaris_error_t *error)
-{
+                               solaris_diagnostics_t **diagnostics, solaris_error_t *error) {
     cfg_arena_clear(&c->ast);
     if (rc == SOLARIS_OK) {
         *out = c->image;
@@ -122,8 +116,7 @@ solaris_status_t solaris_config_compile_bytes_services(const void *bytes, size_t
                                                        const solaris_config_options_t *options,
                                                        const solaris_runtime_services_t *services,
                                                        solaris_config_t **out, solaris_diagnostics_t **diagnostics,
-                                                       solaris_error_t *error)
-{
+                                                       solaris_error_t *error) {
     if (diagnostics)
         *diagnostics = NULL;
     if (out)
@@ -138,14 +131,12 @@ solaris_status_t solaris_config_compile_bytes_services(const void *bytes, size_t
 }
 solaris_status_t solaris_config_compile_bytes(const void *bytes, size_t length, const solaris_config_options_t *options,
                                               solaris_config_t **out, solaris_diagnostics_t **diagnostics,
-                                              solaris_error_t *error)
-{
+                                              solaris_error_t *error) {
     return solaris_config_compile_bytes_services(bytes, length, options, NULL, out, diagnostics, error);
 }
 solaris_status_t solaris_config_compile_file(const char *path, const solaris_config_options_t *options,
                                              solaris_config_t **out, solaris_diagnostics_t **diagnostics,
-                                             solaris_error_t *error)
-{
+                                             solaris_error_t *error) {
     if (out)
         *out = NULL;
     if (diagnostics)

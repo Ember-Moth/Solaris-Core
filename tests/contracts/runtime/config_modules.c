@@ -34,7 +34,7 @@ static void deallocate(void *context, void *pointer)
 }
 static solaris_config_t *config(const char *input)
 {
-    char source[] = "owned-source.yml";
+    char source[] = "owned-source.conf";
     solaris_config_options_t o;
     solaris_config_options_init(&o);
     o.source_name = source;
@@ -47,7 +47,7 @@ static solaris_config_t *config(const char *input)
     CHECK(rc == SOLARIS_OK);
     solaris_diagnostics_release(diagnostics);
     memset(source, 'x', strlen(source));
-    CHECK(!strcmp(solaris_config_source_name(image), "owned-source.yml"));
+    CHECK(!strcmp(solaris_config_source_name(image), "owned-source.conf"));
     return image;
 }
 static uint64_t node_id(solaris_config_module_set_t *set, const char *name)
@@ -245,7 +245,15 @@ static void invoke(fixture_t *f, solaris_task_fn fn)
 }
 static void generation_leases(solaris_budget_t *budget, solaris_executor_t **owners, solaris_replay_store_t *replay)
 {
-    solaris_config_module_set_t *set = make_set(budget, "proxies: [{name: no-udp, type: direct, udp: false}]\n");
+    solaris_config_module_set_t *set = make_set(budget, "[General]\n"
+    "config-version = 1\n"
+    "mode = rule\n"
+    "\n"
+    "[Proxy]\n"
+    "\"no-udp\" = direct, udp-relay=\"false\"\n"
+    "\n"
+    "[Rule]\n"
+    "FINAL,DIRECT\n");
     generation_t g = {.retire_on_zero = 1, .count = 2};
     atomic_init(&g.references, 1);
     atomic_init(&g.pins, 0);
@@ -301,7 +309,12 @@ static void failed_worker(void *context, solaris_status_t status)
 static void failure_rollback(solaris_budget_t *budget, solaris_executor_t *owner, solaris_replay_store_t *replay,
                              allocations_t *a)
 {
-    solaris_config_module_set_t *set = make_set(budget, "{}");
+    solaris_config_module_set_t *set = make_set(budget, "[General]\n"
+    "config-version = 1\n"
+    "mode = rule\n"
+    "\n"
+    "[Rule]\n"
+    "FINAL,DIRECT\n");
     size_t count = 0;
     for (size_t fail = 0;; ++fail) {
         fixture_t f;
@@ -416,7 +429,12 @@ static void rejected_factory_barrier(solaris_budget_t *budget, solaris_executor_
 }
 static void module_sets(solaris_budget_t *budget, allocations_t *a)
 {
-    solaris_config_t *image = config("{}");
+    solaris_config_t *image = config("[General]\n"
+    "config-version = 1\n"
+    "mode = rule\n"
+    "\n"
+    "[Rule]\n"
+    "FINAL,DIRECT\n");
     size_t baseline = solaris_budget_used(budget);
     solaris_config_module_set_t *set = NULL;
     CHECK(solaris_config_module_set_create(budget, image, NULL, 0, &set, NULL) == SOLARIS_OK);
@@ -466,7 +484,15 @@ static void tls_sets(solaris_budget_t *budget)
 {
 #if SOLARIS_HAS_ANYTLS
     solaris_config_t *image =
-        config("proxies: [{name: secured, type: anytls, server: example.com, port: 443, password: secret}]");
+        config("[General]\n"
+    "config-version = 1\n"
+    "mode = rule\n"
+    "\n"
+    "[Proxy]\n"
+    "\"secured\" = anytls, \"example.com\", \"443\", password=\"secret\"\n"
+    "\n"
+    "[Rule]\n"
+    "FINAL,DIRECT\n");
     solaris_config_module_set_t *set = (void *)1;
     solaris_error_t error;
     CHECK(solaris_config_module_set_create(budget, image, NULL, 0, &set, &error) == SOLARIS_EINVAL && !set &&

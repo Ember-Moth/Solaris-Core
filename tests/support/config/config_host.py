@@ -150,8 +150,8 @@ def test(args):
         totals = host.command('traffic')
         assert totals['user_read'] and totals['probe_read'] and totals['physical_read']
         with tempfile.TemporaryDirectory(prefix='solaris-host-bad-') as temporary:
-            invalid = Path(temporary) / 'invalid config.yaml'
-            invalid.write_text('rules: ["MATCH,MISSING"]\n')
+            invalid = Path(temporary) / 'invalid config.conf'
+            invalid.write_text('[General]\nconfig-version=1\n[Rule]\nFINAL,MISSING\n')
             assert host.command('load ' + json.dumps(str(invalid)), expected=None)['status'] != 0
         assert host.command('status')['revision'] == initial['revision']
         echo(original, b'old-plan-after-invalid-load')

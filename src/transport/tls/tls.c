@@ -74,6 +74,7 @@ typedef struct tls_write {
 typedef struct tls_stream {
     solaris_stream_t stream, *wire;
     solaris_scope_t scope;
+    solaris_scope_t *parent_scope;
     solaris_deferred_t pump;
     solaris_deadline_t *deadline;
     uint64_t open_deadline_ns;
@@ -90,11 +91,15 @@ typedef struct tls_stream {
     uint8_t record_header[5];
     size_t record_header_size, record_remaining;
     solaris_buffer_t *output;
+    solaris_buffer_t *alpn_offer;
+    uint8_t selected_alpn[SOLARIS_TLS_MAX_ALPN_PROTOCOL];
+    size_t selected_alpn_length;
     solaris_status_t close_status;
     int accepted, connected, opened, handshake_done, reading;
     int close_requested, writable_requested, wire_writing, wire_shutting;
     int shutdown_requested, notify_sent, wire_eof, wire_gone, bio_eof;
     int record_complete, want_input, raw_requested;
+    int require_alpn;
 } tls_stream_t;
 
 static void schedule(tls_stream_t *tls);
@@ -136,7 +141,28 @@ static void destroyed(void *context)
     SSL_free(tls->ssl); BIO_free(tls->bio);
     solaris_tls_context_release(tls->trust);
     solaris_buffer_release(tls->input); solaris_buffer_release(tls->output);
+    solaris_buffer_release(tls->alpn_offer);
+    solaris_scope_t *parent = tls->parent_scope;
     solaris_memory_free(tls);
+    if (parent) solaris_scope_release(parent);
+}
+
+static solaris_status_t select_alpn(tls_stream_t *tls)
+{
+    const uint8_t *selected = NULL; unsigned length = 0;
+    SSL_get0_alpn_selected(tls->ssl, &selected, &length);
+    if (!length) return tls->require_alpn ? SOLARIS_ENOTSUP : SOLARIS_OK;
+    if (!selected || length > sizeof(tls->selected_alpn) || !tls->alpn_offer) return SOLARIS_EIO;
+    const uint8_t *offer = solaris_buffer_data(tls->alpn_offer);
+    size_t size = solaris_buffer_length(tls->alpn_offer);
+    for (size_t offset = 0; offset < size;) {
+        size_t count = offer[offset++];
+        if (count == length && !memcmp(offer + offset, selected, count)) {
+            memcpy(tls->selected_alpn, selected, count); tls->selected_alpn_length = count; return SOLARIS_OK;
+        }
+        offset += count;
+    }
+    return SOLARIS_EIO;
 }
 
 static void fail(tls_stream_t *tls, solaris_status_t status)
@@ -362,6 +388,8 @@ static void pump(void *context)
                 if (solaris_executor_now_ns(tls->scope.owner) >= tls->open_deadline_ns) {
                     fail(tls, SOLARIS_ETIMEDOUT); break;
                 }
+                solaris_status_t alpn_status = select_alpn(tls);
+                if (alpn_status != SOLARIS_OK) { fail(tls, alpn_status); break; }
                 tls->handshake_done = 1;
                 if (tls->deadline != NULL) solaris_deadline_cancel(tls->deadline);
                 tls->opened = 1;
@@ -510,8 +538,9 @@ static solaris_status_t snapshot(void *state, solaris_io_snapshot_t *out)
 static const solaris_stream_raw_ops_t raw_operations = {raw_capabilities, read_raw, write_raw};
 static const solaris_stream_ops_t operations = {write_stream, shutdown_stream, reading, close_stream, snapshot, &raw_operations};
 
-solaris_status_t solaris_tls_open(solaris_executor_t *owner,
+solaris_status_t solaris_tls_open_ex(solaris_executor_t *owner,
     solaris_tls_context_t *trust, const char *identity, uint16_t minimum_version,
+    const solaris_tls_open_options_t *tls_options,
     const solaris_stream_factory_t *carrier, const solaris_dialer_options_t *options,
     const solaris_address_t *peer, const solaris_stream_callbacks_t *callbacks,
     void *callback_context, solaris_stream_t **out)
@@ -523,6 +552,16 @@ solaris_status_t solaris_tls_open(solaris_executor_t *owner,
         peer == NULL || callbacks == NULL || callbacks->on_open == NULL ||
         callbacks->on_data == NULL || callbacks->on_close == NULL) return SOLARIS_EINVAL;
     if (!solaris_executor_is_owner(owner)) return SOLARIS_ETHREAD;
+    solaris_tls_open_options_t extra = {0}; if (tls_options) extra = *tls_options;
+    if ((extra.require_alpn != 0 && extra.require_alpn != 1) ||
+        extra.cipher_profile > SOLARIS_TLS_CIPHERS_HTTP2 ||
+        (extra.alpn_length && !extra.alpn) || extra.alpn_length > SOLARIS_TLS_MAX_ALPN_OFFER ||
+        (extra.require_alpn && !extra.alpn_length)) return SOLARIS_EINVAL;
+    for (size_t offset = 0; offset < extra.alpn_length;) {
+        size_t count = extra.alpn[offset++];
+        if (!count || count > extra.alpn_length - offset) return SOLARIS_EINVAL;
+        offset += count;
+    }
     solaris_address_t name;
     if (solaris_address_parse(identity, 443u, &name) != SOLARIS_OK) return SOLARIS_EINVAL;
     tls_stream_t *tls = solaris_memory_allocate(solaris_executor_budget(owner), sizeof(*tls));
@@ -530,20 +569,39 @@ solaris_status_t solaris_tls_open(solaris_executor_t *owner,
     memset(tls, 0, sizeof(*tls));
     solaris_status_t rc = solaris_dialer_options_normalize(options, &tls->options);
     if (rc != SOLARIS_OK) { solaris_memory_free(tls); return rc; }
+    if (tls->options.parent_scope) {
+        if (tls->options.parent_scope->owner != owner) { solaris_memory_free(tls); return SOLARIS_ETHREAD; }
+        if (tls->options.parent_scope->cancelled || tls->options.parent_scope->finishing) { solaris_memory_free(tls); return SOLARIS_ECLOSED; }
+    }
+    tls->require_alpn = extra.require_alpn;
+    if (extra.alpn_length) {
+        rc = solaris_buffer_copy(solaris_executor_budget(owner), extra.alpn, extra.alpn_length, &tls->alpn_offer);
+        if (rc != SOLARIS_OK) { destroyed(tls); return rc; }
+    }
     tls->ssl = SSL_new(trust->native);
     BIO *internal = NULL;
     if (tls->ssl == NULL || !BIO_new_bio_pair(&internal, TLS_BIO_BYTES, &tls->bio, TLS_BIO_BYTES)) {
-        SSL_free(tls->ssl); solaris_memory_free(tls); return SOLARIS_ENOMEM;
+        BIO_free(internal); destroyed(tls); return SOLARIS_ENOMEM;
     }
     SSL_set_bio(tls->ssl, internal, internal);
     SSL_set_connect_state(tls->ssl);
     if (!SSL_set_min_proto_version(tls->ssl, minimum_version)) {
-        SSL_free(tls->ssl); BIO_free(tls->bio); solaris_memory_free(tls); return SOLARIS_EINVAL;
+        destroyed(tls); return SOLARIS_EINVAL;
+    }
+    if (extra.cipher_profile == SOLARIS_TLS_CIPHERS_HTTP2 && !SSL_set_strict_cipher_list(tls->ssl,
+        "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:"
+        "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:"
+        "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305")) {
+        destroyed(tls); return SOLARIS_EINVAL;
+    }
+    if (tls->alpn_offer && SSL_set_alpn_protos(tls->ssl,
+        solaris_buffer_data(tls->alpn_offer), solaris_buffer_length(tls->alpn_offer)) != 0) {
+        destroyed(tls); return SOLARIS_EINVAL;
     }
     int valid = name.family == SOLARIS_ADDRESS_DOMAIN ?
         SSL_set1_host(tls->ssl, identity) && SSL_set_tlsext_host_name(tls->ssl, identity) :
         X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(tls->ssl), identity);
-    if (!valid) { SSL_free(tls->ssl); BIO_free(tls->bio); solaris_memory_free(tls); return SOLARIS_EINVAL; }
+    if (!valid) { destroyed(tls); return SOLARIS_EINVAL; }
     tls->trust = trust; solaris_tls_context_retain(trust);
     tls->stream = (solaris_stream_t){&operations, tls, owner};
     tls->callbacks = *callbacks; tls->context = callback_context; tls->reading = 1; tls->want_input = 1;
@@ -551,15 +609,28 @@ solaris_status_t solaris_tls_open(solaris_executor_t *owner,
     tls->pump.run = pump; tls->pump.context = tls;
     rc = solaris_scope_init(&tls->scope, owner, cancel, destroyed, tls);
     if (rc != SOLARIS_OK) { destroyed(tls); return rc; }
+    if (tls->options.parent_scope) {
+        tls->parent_scope = tls->options.parent_scope; solaris_scope_retain(tls->parent_scope);
+    }
     uint64_t now = solaris_executor_now_ns(owner), duration = tls->options.open_timeout_ms * UINT64_C(1000000);
-    if (duration > UINT64_MAX - now) { fail(tls, SOLARIS_EOVERFLOW); return SOLARIS_EOVERFLOW; }
-    tls->open_deadline_ns = now + duration;
+    if (extra.deadline_ns) {
+        if (extra.deadline_ns <= now) { fail(tls, SOLARIS_ETIMEDOUT); return SOLARIS_ETIMEDOUT; }
+        tls->open_deadline_ns = extra.deadline_ns;
+    } else {
+        if (duration > UINT64_MAX - now) { fail(tls, SOLARIS_EOVERFLOW); return SOLARIS_EOVERFLOW; }
+        tls->open_deadline_ns = now + duration;
+    }
+    uint64_t delay = (tls->open_deadline_ns - now - 1) / UINT64_C(1000000) + 1;
     solaris_scope_retain(&tls->scope);
-    rc = solaris_deadline_start(owner, tls->options.open_timeout_ms, deadline, tls, &tls->deadline);
+    rc = solaris_deadline_start(owner, delay, deadline, tls, &tls->deadline);
     if (rc != SOLARIS_OK) { solaris_scope_release(&tls->scope); fail(tls, rc); return rc; }
     /* Encrypted records must fit even if a caller selects tiny plaintext
      * limits. There is only one in-flight wire write, bounded to one record. */
     solaris_dialer_options_t wire_options = tls->options;
+    wire_options.parent_scope = &tls->scope;
+    now = solaris_executor_now_ns(owner);
+    if (now >= tls->open_deadline_ns) { fail(tls, SOLARIS_ETIMEDOUT); return SOLARIS_ETIMEDOUT; }
+    wire_options.open_timeout_ms = (tls->open_deadline_ns - now - 1) / UINT64_C(1000000) + 1;
     if (wire_options.pending_byte_limit < TLS_RECORD_BYTES) wire_options.pending_byte_limit = TLS_RECORD_BYTES;
     wire_options.pending_request_limit = 1u;
     wire_options.read_chunk_size = TLS_RECORD_BYTES;
@@ -567,5 +638,28 @@ solaris_status_t solaris_tls_open(solaris_executor_t *owner,
     if (rc != SOLARIS_OK) { fail(tls, rc); return rc; }
     solaris_scope_retain(&tls->scope);
     tls->accepted = 1; *out = &tls->stream;
+    return SOLARIS_OK;
+}
+
+solaris_status_t solaris_tls_open(solaris_executor_t *owner,
+    solaris_tls_context_t *trust, const char *identity, uint16_t minimum_version,
+    const solaris_stream_factory_t *carrier, const solaris_dialer_options_t *options,
+    const solaris_address_t *peer, const solaris_stream_callbacks_t *callbacks,
+    void *callback_context, solaris_stream_t **out)
+{
+    return solaris_tls_open_ex(owner, trust, identity, minimum_version, NULL,
+        carrier, options, peer, callbacks, callback_context, out);
+}
+solaris_status_t solaris_tls_selected_alpn(solaris_stream_t *stream, void *out, size_t capacity, size_t *length)
+{
+    if (length) *length = 0;
+    if (!stream || !length || (capacity && !out)) return SOLARIS_EINVAL;
+    if (stream->ops != &operations) return SOLARIS_ENOTSUP;
+    if (!solaris_executor_is_owner(stream->owner)) return SOLARIS_ETHREAD;
+    tls_stream_t *tls = stream->state;
+    if (!tls->handshake_done) return SOLARIS_EAGAIN;
+    *length = tls->selected_alpn_length;
+    if (capacity < *length) return SOLARIS_EMSGSIZE;
+    if (*length) memcpy(out, tls->selected_alpn, *length);
     return SOLARIS_OK;
 }

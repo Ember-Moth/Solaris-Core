@@ -4,7 +4,7 @@
 
 ## 1. 项目定位
 
-Solaris Core 是面向应用嵌入的独立 C 网络内核，交付库、头文件、薄平台绑定、测试宿主与可复现构建。原生配置目标是 Surge 风格的 Solaris Conf `.conf`，其模型与行为由 Solaris 自身规范定义。
+Solaris Core 是面向应用嵌入的独立 C 网络内核，交付库、头文件、薄平台绑定、测试宿主与可复现构建。原生配置是 Surge 风格的 Solaris Conf `.conf`，其模型与行为由 Solaris 自身规范定义。
 
 mihomo、Surge、sing-box、libclash 等可用于技术学习和独立对照；不承诺复制其配置、默认值、控制 API 或完整功能。原生格式迁移进度见 [开发计划](DEVELOPMENT_PLAN.md#21-原生配置迁移与近期优先级)。
 
@@ -152,6 +152,8 @@ src/runtime/executor/               I/O worker、mailbox、scope 与 deadline
 src/runtime/memory/                 buffer 与预算
 src/runtime/security/               跨 worker 重放状态
 src/runtime/services/               分配、时钟与失败注入服务
+src/config/conf/                    原生 lexer/parser 与源位置 AST
+src/config/image/                   owned 配置模型、语义校验与编译入口
 src/config/view/                    类型化配置视图与诊断
 src/config/outbound/                dialer/proxy 共用配置
 src/flow/udp/                       association、mapping、reply endpoint
@@ -176,7 +178,7 @@ cmake/                             构建入口、依赖与包配置
 
 组件之间通过契约或明确的共享服务引用，目录调整不改变依赖方向。codec 归 `src/codec/<用途>/`，socket/TLS/session 等通道后端归 `src/transport/<组件>/`，协议私有组合归 `src/adapters/<方向>/<家族>/`。测试与独立对端按对应组件归组，共用测试工具放在相应 support 目录。移动文件时同步模块清单、CMake、include、脚本路径与当前文档链接。
 
-当前 SS 已分为 `module.c`、`crypto.c`、`stream.c`、`packet.c`、`native_udp.c` 和私有头文件；VLESS 已分为 `module.c`、`stream.c` 和私有头文件；AnyTLS 的模块、session codec 与 padding 分离，通用 session 生命周期位于共享 transport 目录。后续 VLESS encryption、Vision、XUDP 接入代码归其家族目录，UoT/XUDP 的可复用 codec/stream backend 归共享层。YAML parser、router、provider、DNS cache/Fake-IP 与 platform/TUN 在对应阶段按同一规则扩展，未交付组件不创建空实现占位。
+当前 SS 已分为 `module.c`、`crypto.c`、`stream.c`、`packet.c`、`native_udp.c` 和私有头文件；VLESS 已分为 `module.c`、`stream.c` 和私有头文件；AnyTLS 的模块、session codec 与 padding 分离，通用 session 生命周期位于共享 transport 目录。后续 VLESS encryption、Vision、XUDP 接入代码归其家族目录，UoT/XUDP 的可复用 codec/stream backend 归共享层。原生 Conf parser、router、provider、DNS cache/Fake-IP 与 platform/TUN 在对应阶段按同一规则扩展，未交付组件不创建空实现占位。
 
 配置属于 snapshot，模块实例属于 worker/runtime generation，session 属于模块实例，flow/association 持有本次选定的引用。关闭先停止新任务并排空异步完成，引用归零后才 destroy；配置提交不释放仍被旧连接使用的对象。
 

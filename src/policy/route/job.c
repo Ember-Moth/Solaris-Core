@@ -1,4 +1,5 @@
 #include "policy/route/internal.h"
+#include "contracts/dns/lookup.h"
 #include <assert.h>
 #include <string.h>
 
@@ -19,7 +20,7 @@ static void run(void *context);
 static void settle(solaris_route_job_t *job, solaris_status_t status)
 {
     if (job->settled) return;
-    if (status != SOLARIS_ECANCELLED && solaris_executor_now_ns(job->scope.owner) >= job->due_ns)
+    if (!solaris_dns_lookup_terminal(status) && solaris_executor_now_ns(job->scope.owner) >= job->due_ns)
         status = SOLARIS_ETIMEDOUT;
     job->status = status; job->settled = 1;
     solaris_scope_cancel(&job->scope);
@@ -89,7 +90,8 @@ static void resolved(void *context, solaris_status_t status, const solaris_addre
 {
     solaris_route_job_t *job = context; job->resolver = NULL; job->resolving = 0;
     if (!job->settled) {
-        if (solaris_executor_now_ns(job->scope.owner) >= job->due_ns) settle(job, SOLARIS_ETIMEDOUT);
+        if (solaris_dns_lookup_terminal(status)) settle(job, status);
+        else if (solaris_executor_now_ns(job->scope.owner) >= job->due_ns) settle(job, SOLARIS_ETIMEDOUT);
         else {
             /* The resolver's ordered first usable address is the route address,
              * not an any-address match whose chosen dial target could differ. */
@@ -118,7 +120,10 @@ static void resolve_target(solaris_route_job_t *job)
         job->resolving = 0; job->resolver = NULL; solaris_scope_release(&job->scope);
         /* A rejected resolver call is still the one permitted resolution
          * attempt; later non-IP rules can make a valid routing decision. */
-        if (!job->settled) schedule(job);
+        if (!job->settled) {
+            if (solaris_dns_lookup_terminal(rc)) settle(job, rc);
+            else schedule(job);
+        }
     } else if (job->settled && job->resolver) job->options.cancel_resolve(job->options.context, job->resolver);
 }
 static int cidr_match(const solaris_route_rule_t *rule, const solaris_address_t *address)
@@ -131,7 +136,7 @@ static int cidr_match(const solaris_route_rule_t *rule, const solaris_address_t 
 }
 static int valid_rule(const solaris_route_rule_t *rule)
 {
-    if (!rule->target_id || rule->no_resolve > 1 || rule->kind < SOLARIS_ROUTE_DOMAIN || rule->kind > SOLARIS_ROUTE_MATCH)
+    if (!rule->target_id || rule->no_resolve > 1 || rule->kind < SOLARIS_ROUTE_DOMAIN || rule->kind > SOLARIS_ROUTE_FINAL)
         return 0;
     if (rule->kind <= SOLARIS_ROUTE_DOMAIN_KEYWORD)
         return !rule->no_resolve && rule->domain[0] && memchr(rule->domain, 0, sizeof(rule->domain));
@@ -163,7 +168,7 @@ static int matches(const solaris_route_job_t *job, const solaris_route_rule_t *r
     case SOLARIS_ROUTE_SRC_PORT: return metadata->source.port >= rule->port_first && metadata->source.port <= rule->port_last;
     case SOLARIS_ROUTE_DST_PORT: return metadata->destination.port >= rule->port_first && metadata->destination.port <= rule->port_last;
     case SOLARIS_ROUTE_NETWORK: return metadata->network == rule->network;
-    case SOLARIS_ROUTE_MATCH: return 1;
+    case SOLARIS_ROUTE_FINAL: return 1;
     default: return 0;
     }
 }
@@ -215,7 +220,7 @@ static void run(void *context)
         if (matches(job, rule)) {
             int skip = 0;
             solaris_status_t rc = acquire(job, rule->target_id, index, &skip);
-            if (rc != SOLARIS_OK && !skip && !job->settled) settle(job, rc);
+            if (rc != SOLARIS_OK && (!skip || rule->kind == SOLARIS_ROUTE_FINAL) && !job->settled) settle(job, rc);
         }
     }
     if (!job->settled && !job->resolving) schedule(job);

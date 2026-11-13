@@ -67,6 +67,7 @@ static solaris_status_t create_instance(const void *config, const solaris_module
     if (rc != SOLARIS_OK) return rc;
     solaris_direct_outbound_t *direct = solaris_memory_allocate(solaris_executor_budget(services->owner), sizeof(*direct));
     if (direct == NULL) return SOLARIS_ENOMEM;
+    options.lookup_view.role = SOLARIS_DNS_DIRECT_TARGET;
     rc = solaris_direct_outbound_init(direct, services->owner, &options);
     if (rc != SOLARIS_OK) { solaris_memory_free(direct); return rc; }
     *state = direct; *out = &direct->outbound;

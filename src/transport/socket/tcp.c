@@ -7,23 +7,28 @@
 typedef struct solaris_tcp {
     solaris_stream_t stream;
     solaris_scope_t scope;
+    solaris_scope_t *parent;
     solaris_deferred_t opened;
     solaris_dialer_options_t options;
     solaris_stream_callbacks_t callbacks;
     void *context;
     uv_tcp_t native;
     uv_connect_t connect;
-    solaris_resolve_t *resolve;
+    void *resolve;
+    solaris_socket_token_t *preparation;
+    solaris_address_t attempt;
     solaris_deadline_t *deadline;
     solaris_buffer_t *receive_buffer;
     solaris_address_t candidates[SOLARIS_RESOLVER_MAX_ADDRESSES];
     size_t candidate_count, next_candidate;
     uint64_t open_deadline_ns;
+    uint16_t destination_port;
     solaris_io_snapshot_t stats;
     solaris_status_t open_status, close_status;
     int accepted, open_settled, initialized, native_closing, retrying;
     int connected, reading, read_desired, shutdown_requested, shutdown_done;
     int close_requested, writable_requested;
+    int policy_retained;
 } solaris_tcp_t;
 
 typedef struct solaris_tcp_write {
@@ -73,7 +78,11 @@ static void on_cancel(void *context)
     if (tcp->accepted && !tcp->open_settled) {
         schedule_open(tcp, tcp->close_status == SOLARIS_OK ? SOLARIS_ECANCELLED : tcp->close_status);
     }
-    if (tcp->resolve != NULL) solaris_resolve_cancel(tcp->resolve);
+    if (tcp->resolve != NULL) {
+        if (tcp->options.lookup.cancel) tcp->options.lookup.cancel(tcp->options.lookup.context, tcp->resolve);
+        else solaris_resolve_cancel(tcp->resolve);
+    }
+    if (tcp->preparation) (void)solaris_socket_preparation_cancel(tcp->preparation);
     if (tcp->deadline != NULL) solaris_deadline_cancel(tcp->deadline);
     if (tcp->initialized && !tcp->native_closing) {
         tcp->native_closing = 1;
@@ -88,7 +97,10 @@ static void on_done(void *context)
     if (tcp->accepted) tcp->callbacks.on_close(tcp->context, &tcp->stream, tcp->close_status);
     solaris_buffer_release(tcp->receive_buffer);
     solaris_traffic_counter_release(tcp->options.traffic);
+    solaris_scope_t *parent = tcp->parent;
+    if (tcp->policy_retained) tcp->options.async_policy.release(tcp->options.async_policy.context);
     solaris_memory_free(tcp);
+    if (parent) solaris_scope_release(parent);
 }
 
 static void close_with_status(solaris_tcp_t *tcp, solaris_status_t status)
@@ -143,7 +155,7 @@ static void alloc_read(uv_handle_t *native, size_t suggested, uv_buf_t *buffer)
         return;
     }
     *buffer = uv_buf_init((char *)solaris_buffer_mutable_data(tcp->receive_buffer),
-                          (unsigned int)solaris_buffer_capacity(tcp->receive_buffer));
+                         (unsigned int)solaris_buffer_capacity(tcp->receive_buffer));
 }
 
 static void on_read(uv_stream_t *native, ssize_t count, const uv_buf_t *buffer)
@@ -211,6 +223,34 @@ static void on_connect(uv_connect_t *native, int status)
     solaris_scope_release(&tcp->scope);
 }
 
+static solaris_status_t connect_prepared(solaris_tcp_t *tcp)
+{
+    if (tcp->scope.cancelled || !solaris_executor_accepting(tcp->scope.owner)) return SOLARIS_ECANCELLED;
+    if (solaris_executor_now_ns(tcp->scope.owner) >= tcp->open_deadline_ns) return SOLARIS_ETIMEDOUT;
+    struct sockaddr_storage remote;
+    solaris_status_t status = solaris_address_to_sockaddr(&tcp->attempt, &remote);
+    if (status != SOLARIS_OK) return status;
+    tcp->connect.data = tcp;
+    solaris_scope_retain(&tcp->scope);
+    int rc = uv_tcp_connect(&tcp->connect, &tcp->native, (const struct sockaddr *)&remote, on_connect);
+    if (rc != 0) {
+        solaris_scope_release(&tcp->scope);
+        tcp->stats.last_system_error = rc;
+    }
+    return solaris_socket_status(rc);
+}
+static void preparation_done(void *context, solaris_status_t status)
+{
+    solaris_tcp_t *tcp = context;
+    tcp->preparation = NULL;
+    if (tcp->scope.cancelled) return;
+    if (status == SOLARIS_OK) status = connect_prepared(tcp);
+    if (status != SOLARIS_OK) {
+        schedule_open(tcp, status);
+        close_with_status(tcp, status);
+    }
+}
+
 static solaris_status_t start_attempt(solaris_tcp_t *tcp)
 {
     if (!solaris_executor_accepting(tcp->scope.owner)) return SOLARIS_ECANCELLED;
@@ -218,7 +258,9 @@ static solaris_status_t start_attempt(solaris_tcp_t *tcp)
     const solaris_address_t *destination = NULL;
     while (tcp->next_candidate < tcp->candidate_count) {
         const solaris_address_t *candidate = &tcp->candidates[tcp->next_candidate++];
-        if (tcp->options.local_bind.family == 0u || tcp->options.local_bind.family == candidate->family) {
+        uint32_t family_bit = candidate->family == SOLARIS_ADDRESS_IPV4 ? 1u : 2u;
+        if ((tcp->options.local_bind.family == 0u || tcp->options.local_bind.family == candidate->family) &&
+            (!tcp->options.network_view_present || (tcp->options.allowed_families & family_bit))) {
             destination = candidate; break;
         }
     }
@@ -239,18 +281,12 @@ static solaris_status_t start_attempt(solaris_tcp_t *tcp)
     solaris_status_t status = solaris_socket_prepare(&tcp->options, (uv_handle_t *)&tcp->native,
                                                     destination->family, SOLARIS_SOCKET_TCP);
     if (status != SOLARIS_OK) return status;
-    if (!solaris_executor_accepting(tcp->scope.owner)) return SOLARIS_ECANCELLED;
-    struct sockaddr_storage remote;
-    status = solaris_address_to_sockaddr(destination, &remote);
-    if (status != SOLARIS_OK) return status;
-    tcp->connect.data = tcp;
-    solaris_scope_retain(&tcp->scope);
-    rc = uv_tcp_connect(&tcp->connect, &tcp->native, (const struct sockaddr *)&remote, on_connect);
-    if (rc != 0) {
-        solaris_scope_release(&tcp->scope);
-        tcp->stats.last_system_error = rc;
-    }
-    return solaris_socket_status(rc);
+    tcp->attempt = *destination;
+    if (tcp->options.async_policy.start)
+        return solaris_socket_prepare_async(&tcp->options, tcp->scope.owner, (uv_handle_t *)&tcp->native,
+            destination->family, SOLARIS_SOCKET_TCP, tcp->open_deadline_ns, &tcp->scope,
+            preparation_done, tcp, &tcp->preparation);
+    return connect_prepared(tcp);
 }
 
 static void on_resolve(void *context, solaris_status_t status,
@@ -259,9 +295,17 @@ static void on_resolve(void *context, solaris_status_t status,
     solaris_tcp_t *tcp = context;
     tcp->resolve = NULL;
     if (!tcp->scope.cancelled) {
+        if (status == SOLARIS_OK && (!addresses || !count || count > SOLARIS_RESOLVER_MAX_ADDRESSES))
+            status = SOLARIS_EINVAL;
+        if (status == SOLARIS_OK) {
+            for (size_t i = 0; i < count; ++i)
+                if (addresses[i].family != SOLARIS_ADDRESS_IPV4 && addresses[i].family != SOLARIS_ADDRESS_IPV6)
+                    status = SOLARIS_EINVAL;
+        }
         if (status == SOLARIS_OK) {
             tcp->candidate_count = count;
             memcpy(tcp->candidates, addresses, count * sizeof(*addresses));
+            for (size_t i = 0; i < count; ++i) tcp->candidates[i].port = tcp->destination_port;
             status = start_attempt(tcp);
         }
         if (status != SOLARIS_OK) {
@@ -383,16 +427,27 @@ solaris_status_t solaris_dialer_open_stream(solaris_executor_t *executor,
     solaris_dialer_options_t selected;
     solaris_status_t rc = solaris_socket_options(options, &selected);
     if (rc != SOLARIS_OK) return rc;
+    if (selected.parent_scope && selected.parent_scope->owner != executor) return SOLARIS_ETHREAD;
+    if (selected.parent_scope && (selected.parent_scope->cancelled || selected.parent_scope->finishing)) return SOLARIS_ECLOSED;
+    if (selected.network_view_present && !selected.allowed_families) return SOLARIS_ENOTSUP;
+    if (destination->family == SOLARIS_ADDRESS_DOMAIN && selected.require_lookup && !selected.lookup.start)
+        return SOLARIS_ENOTSUP;
     solaris_tcp_t *tcp = solaris_memory_allocate(solaris_executor_budget(executor), sizeof(*tcp));
     if (tcp == NULL) return SOLARIS_ENOMEM;
     memset(tcp, 0, sizeof(*tcp));
     tcp->options = selected; tcp->callbacks = *callbacks; tcp->context = context;
+    tcp->destination_port = destination->port;
     tcp->stream.ops = &stream_ops; tcp->stream.state = tcp; tcp->stream.owner = executor;
     tcp->opened.run = deliver_open; tcp->opened.context = tcp;
     tcp->read_desired = 1;
     tcp->stats.max_message_bytes = selected.pending_byte_limit;
     rc = solaris_scope_init(&tcp->scope, executor, on_cancel, on_done, tcp);
     if (rc != SOLARIS_OK) { solaris_memory_free(tcp); return rc; }
+    tcp->parent = selected.parent_scope;
+    if (tcp->parent) solaris_scope_retain(tcp->parent);
+    if (selected.async_policy.start && selected.async_policy.retain) {
+        selected.async_policy.retain(selected.async_policy.context); tcp->policy_retained = 1;
+    }
     solaris_traffic_counter_retain(tcp->options.traffic);
     const uint64_t now = solaris_executor_now_ns(executor);
     const uint64_t duration = selected.open_timeout_ms * UINT64_C(1000000);
@@ -405,7 +460,14 @@ solaris_status_t solaris_dialer_open_stream(solaris_executor_t *executor,
     }
     if (destination->family == SOLARIS_ADDRESS_DOMAIN) {
         solaris_scope_retain(&tcp->scope);
-        rc = solaris_resolve_start(executor, destination, 0u, on_resolve, tcp, &tcp->resolve);
+        if (selected.lookup.start) {
+            rc = selected.lookup.start(selected.lookup.context, executor, &selected.lookup_view,
+                destination, tcp->open_deadline_ns, on_resolve, tcp, &tcp->resolve);
+        } else {
+            solaris_resolve_t *request = NULL;
+            rc = solaris_resolve_start_scoped(executor, &tcp->scope, destination, 0u, on_resolve, tcp, &request);
+            tcp->resolve = request;
+        }
         if (rc != SOLARIS_OK) solaris_scope_release(&tcp->scope);
     } else {
         tcp->candidates[0] = *destination; tcp->candidate_count = 1u;

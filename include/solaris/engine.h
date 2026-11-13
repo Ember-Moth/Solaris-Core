@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <solaris/error.h>
+#include <solaris/platform.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -77,6 +78,10 @@ typedef struct solaris_host {
     void *context;
     /* Optional. Keep context alive until destroy() has returned successfully. */
     solaris_event_callback_t on_event;
+    /* Optional initial owned network view; create retains it before return.
+     * Callers may release their reference immediately. Policy callbacks run on
+     * I/O owners and must drain accepted work before destroy can complete. */
+    solaris_network_snapshot_t *network;
 } solaris_host_t;
 
 typedef struct solaris_engine_snapshot {
@@ -98,7 +103,7 @@ typedef struct solaris_engine_snapshot {
 SOLARIS_API void solaris_engine_options_init(solaris_engine_options_t *options);
 
 /*
- * Synchronous initialization; no network, TUN, YAML, or protocol activation.
+ * Synchronous initialization; no network, TUN, configuration, or protocol activation.
  * options/host may be NULL for defaults and are copied before return.
  * On failure *out_engine is NULL. error is optional and caller-owned.
  */

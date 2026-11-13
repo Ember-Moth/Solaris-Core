@@ -73,8 +73,8 @@ def dual_sockets(kind):
 
 
 def dns_config(web, socks):
-    return config(web, socks).replace('rules: ["MATCH,DIRECT"]',
-        'rules: ["IP-CIDR,127.0.0.0/8,DIRECT", "IP-CIDR6,::1/128,DIRECT", "MATCH,REJECT"]')
+    return config(web, socks).replace('[Rule]\nFINAL,DIRECT',
+        '[Rule]\nIP-CIDR,127.0.0.0/8,DIRECT\nIP-CIDR6,::1/128,DIRECT\nFINAL,REJECT')
 
 
 def pending_connect(runtime, web, peer):
@@ -95,12 +95,12 @@ def route_without_dns(runtime, ports, peer):
         ('localhost', ['DOMAIN,localhost,REJECT', 'IP-CIDR,127.0.0.0/8,DIRECT'], 0),
         ('127.0.0.1', ['IP-CIDR,127.0.0.0/8,REJECT'], 0),
         ('localhost', ['SRC-IP-CIDR,127.0.0.0/8,REJECT'], 0),
-        ('localhost', ['IP-CIDR,127.0.0.0/8,DIRECT,no-resolve', 'MATCH,REJECT'], 1),
+        ('localhost', ['IP-CIDR,127.0.0.0/8,DIRECT,no-resolve', 'FINAL,REJECT'], 1),
     ]
-    import json
     for host, rules, expected_rule in cases:
-        yaml = config(web, socks).replace('rules: ["MATCH,DIRECT"]', 'rules: ' + json.dumps(rules))
-        _, revision = apply(runtime, yaml)
+        if not rules[-1].startswith('FINAL,'): rules.append('FINAL,DIRECT')
+        conf = config(web, socks).replace('[Rule]\nFINAL,DIRECT', '[Rule]\n' + '\n'.join(rules))
+        _, revision = apply(runtime, conf)
         reject = next(node['id'] for node in runtime.command('G')['nodes'] if node['name'] == 'REJECT')
         runtime.command('U')
         with connect(web) as conn:
@@ -260,8 +260,8 @@ def owner_prepare_failures(runtime, ports):
     old_http, old_socks = http_tunnel(web, target), socks_tcp(socks, target)
     records = [for_socket(runtime, stream) for stream in (old_http, old_socks)]
     assert {record['worker'] for record in records} == {0, 1}
-    extra = ('  - {name: extra-web, type: http, listen: 127.0.0.1, port: 19090}\n'
-             '  - {name: extra-socks, type: socks, listen: 127.0.0.1, port: 19091, udp: true}\n')
+    extra = ('extra-web=http,127.0.0.1,19090\n'
+             'extra-socks=socks5,127.0.0.1,19091,udp-relay=true\n')
     candidate = config(web, socks, extra=extra)
     for owner in (0, 1):
         failures = 0

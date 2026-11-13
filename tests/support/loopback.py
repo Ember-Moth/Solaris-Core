@@ -30,3 +30,21 @@ def udp_pair(family):
             if error.errno != errno.EADDRINUSE:
                 raise
     raise OSError(errno.EADDRINUSE, "could not reserve a loopback UDP port in both families")
+
+
+def tcp_udp_pair(family):
+    """Reserve one loopback port for TCP, UDP and the other UDP family."""
+    hosts = {socket.AF_INET: "127.0.0.1", socket.AF_INET6: "::1"}
+    for _ in range(32):
+        udp, guard = udp_pair(family)
+        tcp = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            if family == socket.AF_INET6:
+                tcp.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            tcp.bind((hosts[family], udp.getsockname()[1]))
+            return tcp, udp, guard
+        except OSError as error:
+            tcp.close(); udp.close(); guard.close()
+            if error.errno != errno.EADDRINUSE:
+                raise
+    raise OSError(errno.EADDRINUSE, "could not reserve matching loopback TCP/UDP ports")

@@ -90,7 +90,7 @@ def main():
                   for path in (relocated / "include").rglob("*") if path.is_file()}
         if expected != actual:
             raise SystemExit(f"unexpected installed headers: expected={expected}, actual={actual}")
-        for relative in ["THIRD_PARTY_NOTICES.md", "lock.json", "licenses/libyaml/License",
+        for relative in ["THIRD_PARTY_NOTICES.md", "lock.json",
                          "licenses/libuv/LICENSE", "licenses/libuv/LICENSE-extra"]:
             license_file = relocated / "share/Solaris" / relative
             if not license_file.is_file() or not license_file.stat().st_size:
@@ -156,8 +156,8 @@ def main():
         if args.runtime_proxy:
             run([sys.executable, str(Path(args.source).resolve().parent / "support/config/config_host.py"),
                  str(executable_path(example_build, args.config, "solaris_config_host")),
-                 str(example_source / "config_host.yaml"),
-                 str(example_source / "config_host_reload.yaml")], env=environment)
+                 str(example_source / "config_host.conf"),
+                 str(example_source / "config_host_reload.conf")], env=environment)
         c_only = work / "c-only-build"
         c_command = [args.cmake, "-S", str(source), "-B", str(c_only),
                      f"-DCMAKE_PREFIX_PATH={relocated}", f"-DCMAKE_BUILD_TYPE={args.config}",

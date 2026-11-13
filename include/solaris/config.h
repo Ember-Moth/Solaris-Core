@@ -16,11 +16,11 @@ enum { SOLARIS_DIAGNOSTIC_ERROR = 1, SOLARIS_DIAGNOSTIC_WARNING = 2 };
 enum { SOLARIS_CONFIG_PARSE = 1, SOLARIS_CONFIG_NORMALIZE = 2, SOLARIS_CONFIG_VALIDATE = 3,
        SOLARIS_CONFIG_PREPARE = 4, SOLARIS_CONFIG_COMMIT = 5 };
 typedef struct solaris_config_options {
-    /* NULL base directory means relative resource references are rejected.
+    /* Optional source metadata. Conf v1 does not load external resources.
      * All strings are borrowed only until the compile call returns. */
     const char *base_directory, *source_name;
     size_t input_limit_bytes, memory_limit_bytes, string_limit_bytes;
-    uint32_t depth_limit, node_limit, alias_limit, diagnostic_limit;
+    uint32_t line_limit_bytes, node_limit, entry_limit, diagnostic_limit;
 } solaris_config_options_t;
 typedef struct solaris_config_diagnostic {
     uint32_t severity, stage, line, column, related_line, related_column;
@@ -46,7 +46,7 @@ typedef struct solaris_config_listener_info {
     uint64_t id;
     char name[128], address[256];
     uint16_t port;
-    /* YAML value, host-requested value, and actual address/port above. */
+    /* Configured value, host-requested value, and actual address/port above. */
     char configured_address[256], requested_address[256];
     uint16_t configured_port, requested_port;
     uint32_t binding_overridden;
@@ -57,7 +57,7 @@ typedef struct solaris_config_listener_info {
 typedef struct solaris_config_bind_override {
     uint64_t listener_id;
     /* Numeric address, or NULL to preserve the compiled address. A zero port
-     * explicitly requests a host ephemeral port; it does not disable YAML. */
+     * explicitly requests a host ephemeral port; it does not disable the listener. */
     const char *address;
     uint16_t port;
 } solaris_config_bind_override_t;
@@ -130,18 +130,21 @@ SOLARIS_API solaris_status_t solaris_engine_get_bound_listener(solaris_engine_t 
 SOLARIS_API solaris_status_t solaris_config_get_listener(const solaris_config_t *config,
     size_t index, solaris_config_listener_info_t *out);
 
+/* These entry points accept Solaris Conf v1 only, with config-version = 1
+ * in [General]. Syntax/static checks perform no network or resource I/O.
+ * compile_file reads only the explicitly requested file; no format fallback. */
 SOLARIS_API void solaris_config_options_init(solaris_config_options_t *options);
 /* Offline and synchronous; do not call on I/O/control callbacks. No resolver,
  * socket, TLS handshake or listener activation. Input is copied into owned,
  * immutable records, independent of the caller buffer and parser lifetime.
  * On failure out_config=NULL; diagnostics may still be returned and must be
  * released. A successful image does not imply runtime resources are prepared.
- * Resource paths are recorded here; reading trust files belongs to prepare. */
+ * Trust PEM is supplied explicitly to prepare by the host. */
 SOLARIS_API solaris_status_t solaris_config_compile_bytes(const void *bytes, size_t length,
     const solaris_config_options_t *options, solaris_config_t **out_config,
     solaris_diagnostics_t **out_diagnostics, solaris_error_t *error);
-/* Reads only this bounded YAML file. If base_directory is NULL, use its parent
- * directory for resource references. Never recursively includes other YAML. */
+/* Reads only this bounded configuration file. If base_directory is NULL, use
+ * its parent as source metadata. Never recursively includes other files. */
 SOLARIS_API solaris_status_t solaris_config_compile_file(const char *path,
     const solaris_config_options_t *options, solaris_config_t **out_config,
     solaris_diagnostics_t **out_diagnostics, solaris_error_t *error);

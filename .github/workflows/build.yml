@@ -41,8 +41,7 @@ jobs:
         with:
           name: sdk-evidence-${{ matrix.os }}-shared-${{ matrix.shared }}
           path: |
-            build/config-full-differential.json
-            build/reference-tools/mihomo-full-reference*-evidence.json
+            build/config-native.json
             build/Testing/Temporary/LastTest.log
 
   sanitizers:
@@ -124,7 +123,7 @@ jobs:
         run: |
           mkdir -p build-fuzz/corpus build-fuzz/artifacts
           build-fuzz/solaris_parser_fuzz build-fuzz/corpus build-fuzz/seeds -dict=tests/fuzz/protocols.dict -max_total_time=60 -max_len=196608 -timeout=5 -rss_limit_mb=2048 -print_final_stats=1 -artifact_prefix=build-fuzz/artifacts/ 2>&1 | tee build-fuzz/fuzz.log
-      - name: Exercise YAML compiler with ASan and UBSan
+      - name: Exercise Solaris Conf compiler with ASan and UBSan
         shell: bash
         run: |
           mkdir -p build-fuzz/config-corpus build-fuzz/config-artifacts

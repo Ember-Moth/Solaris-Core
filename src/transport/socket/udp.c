@@ -5,7 +5,9 @@
 typedef struct solaris_udp {
     solaris_datagram_t datagram;
     solaris_scope_t scope;
+    solaris_scope_t *parent;
     solaris_deferred_t opened;
+    solaris_socket_token_t *preparation;
     solaris_dialer_options_t options;
     solaris_datagram_callbacks_t callbacks;
     void *context;
@@ -13,10 +15,11 @@ typedef struct solaris_udp {
     solaris_buffer_t *receive_buffer;
     solaris_address_t local;
     solaris_io_snapshot_t stats;
-    solaris_status_t close_status;
+    solaris_status_t close_status, open_status;
     uint32_t family;
-    int initialized, accepted, open_delivered, native_closing;
+    int initialized, accepted, open_delivered, open_scheduled, native_closing;
     int close_requested, read_desired, reading, writable_requested;
+    int policy_retained;
 } solaris_udp_t;
 
 typedef struct solaris_udp_send {
@@ -30,6 +33,7 @@ typedef struct solaris_udp_send {
 } solaris_udp_send_t;
 
 static solaris_status_t set_reading(void *state, int enabled);
+static void schedule_open(solaris_udp_t *udp, solaris_status_t status);
 
 static void on_native_close(uv_handle_t *native)
 {
@@ -42,6 +46,8 @@ static void on_cancel(void *context)
 {
     solaris_udp_t *udp = context;
     if (!udp->close_requested) { udp->close_requested = 1; udp->close_status = SOLARIS_ECANCELLED; }
+    schedule_open(udp, udp->close_status == SOLARIS_OK ? SOLARIS_ECANCELLED : udp->close_status);
+    if (udp->preparation) (void)solaris_socket_preparation_cancel(udp->preparation);
     if (udp->initialized && !udp->native_closing) {
         udp->native_closing = 1;
         (void)uv_udp_recv_stop(&udp->native);
@@ -55,7 +61,10 @@ static void on_done(void *context)
     if (udp->accepted) udp->callbacks.on_close(udp->context, &udp->datagram, udp->close_status);
     solaris_buffer_release(udp->receive_buffer);
     solaris_traffic_counter_release(udp->options.traffic);
+    solaris_scope_t *parent = udp->parent;
+    if (udp->policy_retained) udp->options.async_policy.release(udp->options.async_policy.context);
     solaris_memory_free(udp);
+    if (parent) solaris_scope_release(parent);
 }
 
 static void close_with_status(solaris_udp_t *udp, solaris_status_t status)
@@ -68,7 +77,7 @@ static void close_with_status(solaris_udp_t *udp, solaris_status_t status)
 static void deliver_open(void *context)
 {
     solaris_udp_t *udp = context;
-    const solaris_status_t status = udp->scope.cancelled ? SOLARIS_ECANCELLED : SOLARIS_OK;
+    const solaris_status_t status = udp->scope.cancelled && udp->open_status == SOLARIS_OK ? SOLARIS_ECANCELLED : udp->open_status;
     udp->open_delivered = 1;
     udp->callbacks.on_open(udp->context, &udp->datagram, status);
     if (status == SOLARIS_OK && !udp->scope.cancelled && udp->read_desired) {
@@ -76,6 +85,22 @@ static void deliver_open(void *context)
         if (rc != SOLARIS_OK) close_with_status(udp, rc);
     }
     solaris_scope_release(&udp->scope);
+}
+
+static void schedule_open(solaris_udp_t *udp, solaris_status_t status)
+{
+    if (!udp->accepted || udp->open_scheduled || udp->open_delivered) return;
+    udp->open_scheduled = 1; udp->open_status = status;
+    solaris_scope_retain(&udp->scope);
+    solaris_status_t rc = solaris_executor_defer(udp->scope.owner, &udp->opened);
+    assert(rc == SOLARIS_OK); (void)rc;
+}
+static void preparation_done(void *context, solaris_status_t status)
+{
+    solaris_udp_t *udp = context; udp->preparation = NULL;
+    if (udp->scope.cancelled) return;
+    schedule_open(udp, status);
+    if (status != SOLARIS_OK) close_with_status(udp, status);
 }
 
 static void alloc_read(uv_handle_t *native, size_t suggested, uv_buf_t *buffer)
@@ -89,7 +114,7 @@ static void alloc_read(uv_handle_t *native, size_t suggested, uv_buf_t *buffer)
         return;
     }
     *buffer = uv_buf_init((char *)solaris_buffer_mutable_data(udp->receive_buffer),
-                          (unsigned int)solaris_buffer_capacity(udp->receive_buffer));
+                         (unsigned int)solaris_buffer_capacity(udp->receive_buffer));
 }
 
 static void on_read(uv_udp_t *native, ssize_t count, const uv_buf_t *buffer,
@@ -216,7 +241,17 @@ solaris_status_t solaris_dialer_open_datagram(solaris_executor_t *executor,
     solaris_dialer_options_t selected;
     solaris_status_t rc = solaris_socket_options(options, &selected);
     if (rc != SOLARIS_OK) return rc;
+    if (selected.parent_scope && selected.parent_scope->owner != executor) return SOLARIS_ETHREAD;
+    if (selected.parent_scope && (selected.parent_scope->cancelled || selected.parent_scope->finishing)) return SOLARIS_ECLOSED;
     if (selected.local_bind.family != 0u && selected.local_bind.family != family) return SOLARIS_EINVAL;
+    if (selected.network_view_present && !(selected.allowed_families & (family == SOLARIS_ADDRESS_IPV4 ? 1u : 2u)))
+        return SOLARIS_ENOTSUP;
+    uint64_t deadline_ns = 0;
+    if (selected.async_policy.start) {
+        uint64_t now = solaris_executor_now_ns(executor), duration = selected.open_timeout_ms * UINT64_C(1000000);
+        if (now > UINT64_MAX - duration) return SOLARIS_EOVERFLOW;
+        deadline_ns = now + duration;
+    }
     solaris_udp_t *udp = solaris_memory_allocate(solaris_executor_budget(executor), sizeof(*udp));
     if (udp == NULL) return SOLARIS_ENOMEM;
     memset(udp, 0, sizeof(*udp));
@@ -227,6 +262,11 @@ solaris_status_t solaris_dialer_open_datagram(solaris_executor_t *executor,
     udp->stats.max_message_bytes = family == SOLARIS_ADDRESS_IPV6 ? 65527u : 65507u;
     rc = solaris_scope_init(&udp->scope, executor, on_cancel, on_done, udp);
     if (rc != SOLARIS_OK) { solaris_memory_free(udp); return rc; }
+    udp->parent = selected.parent_scope;
+    if (udp->parent) solaris_scope_retain(udp->parent);
+    if (selected.async_policy.start && selected.async_policy.retain) {
+        selected.async_policy.retain(selected.async_policy.context); udp->policy_retained = 1;
+    }
     solaris_traffic_counter_retain(udp->options.traffic);
     int native_rc = uv_udp_init_ex(solaris_executor_loop(executor), &udp->native,
                                    (unsigned int)(family == SOLARIS_ADDRESS_IPV6 ? AF_INET6 : AF_INET));
@@ -248,11 +288,12 @@ solaris_status_t solaris_dialer_open_datagram(solaris_executor_t *executor,
         }
     }
     if (native_rc != 0) rc = solaris_socket_status(native_rc);
+    if (rc == SOLARIS_OK && selected.async_policy.start)
+        rc = solaris_socket_prepare_async(&selected, executor, (uv_handle_t *)&udp->native,
+            family, SOLARIS_SOCKET_UDP, deadline_ns, &udp->scope, preparation_done, udp, &udp->preparation);
     if (rc != SOLARIS_OK) { close_with_status(udp, rc); return rc; }
     udp->accepted = 1;
-    solaris_scope_retain(&udp->scope);
-    rc = solaris_executor_defer(executor, &udp->opened);
-    assert(rc == SOLARIS_OK); (void)rc;
+    if (!udp->preparation) schedule_open(udp, SOLARIS_OK);
     *out = &udp->datagram;
     return SOLARIS_OK;
 }

@@ -87,7 +87,6 @@ static void eof(void *context, solaris_stream_t *stream)
 { proxy_case_t *test = context; CHECK(stream == test->stream); test->eof++; }
 static void writable(void *context, solaris_stream_t *stream)
 { proxy_case_t *test = context; CHECK(stream == test->stream); test->writable++; }
-static const solaris_stream_callbacks_t callbacks;
 static solaris_status_t open_next(proxy_case_t *test);
 static void closed(void *context, solaris_stream_t *stream, solaris_status_t status)
 {

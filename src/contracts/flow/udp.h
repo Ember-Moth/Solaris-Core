@@ -85,6 +85,14 @@ solaris_status_t solaris_udp_submit(solaris_udp_dispatcher_t *dispatcher, const 
  * only enqueue and ignore route (which may be NULL), preserving their plan.
  * Rejection retains nothing. The snapshot capture and this call form one
  * admission; deferred routing never reacquires a newer configuration. */
+/* With route.dial_lookup, the captured routing context is held until final
+ * association destruction, not just route completion. Every later numeric
+ * destination lookup uses that hook/view, DIRECT_TARGET and the mapping's
+ * absolute deadline; cancellation returns through the same hook. Returned
+ * address order is authoritative. Terminal lookup cancellation/network/access/
+ * closed errors close the association, while ordinary DNS failures retain the
+ * existing per-admission retry window. Without the hook, legacy dispatcher
+ * resolver behavior remains unchanged. */
 solaris_status_t solaris_udp_submit_routed(solaris_udp_dispatcher_t *dispatcher, const solaris_udp_key_t *key,
                                            const solaris_address_t *target, const solaris_slice_t *payload,
                                            const solaris_udp_reply_endpoint_t *reply, solaris_io_done_fn done,

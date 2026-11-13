@@ -10,7 +10,7 @@ typedef struct solaris_config_node {
     uint32_t udp_enabled;
     /* Immutable normalized module-only fields; name/type/udp were consumed by
      * the common compiler. Default trust is injected by prepare, never by
-     * silently turning verification off or exposing an internal YAML key. */
+     * silently turning verification off or exposing an internal configuration key. */
     const solaris_config_view_t *fields;
     const char *trust_file;
     uint32_t line, column;
@@ -27,8 +27,8 @@ typedef struct solaris_config_listener {
     uint64_t id;
     const char *name;
     /* Values equal SOLARIS_INBOUND_HTTP/SOCKS5/MIXED, without depending on the
-     * optional proxy adapter's headers. Top-level YAML port zero omits its
-     * listener; explicit listeners[] require a nonzero fixed port in M2. */
+     * optional proxy adapter's headers. General listen=off omits its
+     * listener; configured listeners require a nonzero fixed port. */
     uint32_t protocol, udp;
     solaris_address_t listen;
     const solaris_config_auth_t *auth;

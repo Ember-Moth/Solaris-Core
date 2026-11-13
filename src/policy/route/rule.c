@@ -53,7 +53,7 @@ solaris_status_t solaris_route_rule_compile(const char *kind, const char *value,
     if (!out || !kind || !target || (no_resolve != 0 && no_resolve != 1))
         return invalid(error, SOLARIS_EINVAL, "Invalid route rule arguments");
     static const char *const names[] = {"DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "IP-CIDR6",
-        "SRC-IP-CIDR", "SRC-PORT", "DST-PORT", "NETWORK", "MATCH"};
+        "SRC-IP-CIDR", "SRC-PORT", "DST-PORT", "NETWORK", "FINAL"};
     solaris_route_rule_t rule = {0};
     for (size_t i = 0; i < sizeof(names) / sizeof(*names); ++i)
         if (!strcmp(kind, names[i])) { rule.kind = (uint32_t)i + 1; break; }
@@ -63,8 +63,8 @@ solaris_status_t solaris_route_rule_compile(const char *kind, const char *value,
     rule.target_id = target; rule.no_resolve = (uint32_t)no_resolve;
     if (!value) value = "";
     size_t length = strlen(value); trim(&value, &length);
-    if (rule.kind == SOLARIS_ROUTE_MATCH) {
-        if (length) return invalid(error, SOLARIS_EINVAL, "MATCH has no matcher value");
+    if (rule.kind == SOLARIS_ROUTE_FINAL) {
+        if (length) return invalid(error, SOLARIS_EINVAL, "FINAL has no matcher value");
     } else if (rule.kind <= SOLARIS_ROUTE_DOMAIN_KEYWORD) {
         if (solaris_route_normalize_domain(value, length, rule.kind == SOLARIS_ROUTE_DOMAIN_SUFFIX,
             rule.kind == SOLARIS_ROUTE_DOMAIN_KEYWORD, rule.domain) != SOLARIS_OK)

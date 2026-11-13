@@ -1,5 +1,6 @@
 #ifndef SOLARIS_CONFIG_INTERNAL_H
 #define SOLARIS_CONFIG_INTERNAL_H
+#include "contracts/config/dns.h"
 #include "contracts/config/image.h"
 #include "contracts/io/buffer.h"
 #include "runtime/memory/alignment.h"
@@ -19,14 +20,13 @@ typedef struct cfg_arena {
     cfg_allocation_t *head;
 } cfg_arena_t;
 typedef struct cfg_node cfg_node_t;
-enum { CFG_SCALAR, CFG_MAP, CFG_SEQUENCE, CFG_ALIAS };
+enum { CFG_SCALAR, CFG_MAP, CFG_SEQUENCE };
 struct cfg_node {
-    unsigned kind, plain;
+    unsigned kind;
     uint32_t line, column, related_line, related_column;
-    const char *scalar, *tag, *anchor;
+    const char *scalar;
     size_t length, count;
-    cfg_node_t *children, *tail, *next, *target;
-    int building;
+    cfg_node_t *children, *tail, *next;
 };
 struct solaris_config {
     atomic_size_t references;
@@ -36,6 +36,7 @@ struct solaris_config {
     solaris_config_group_t *groups;
     solaris_route_rule_t *rules;
     solaris_config_listener_t *listeners;
+    solaris_config_dns_t *dns;
     uint64_t direct_target, global_target;
     const char *base_directory, *source_name;
 };
@@ -51,7 +52,7 @@ typedef struct cfg_context {
     solaris_config_t *image;
     solaris_diagnostics_t *diagnostics;
     solaris_status_t status;
-    uint32_t nodes, aliases, expanded;
+    uint32_t nodes, entries;
     unsigned errors;
 } cfg_context_t;
 void *cfg_alloc(cfg_arena_t *arena, size_t size);
@@ -60,11 +61,18 @@ void cfg_arena_clear(cfg_arena_t *arena);
 void cfg_diagnostic(cfg_context_t *c, const cfg_node_t *node, const char *path, uint32_t severity, uint32_t stage,
                     solaris_status_t status, const char *message);
 void cfg_fail(cfg_context_t *c, const cfg_node_t *node, const char *path, solaris_status_t status, const char *message);
-solaris_budget_t *solaris_yaml_enter_budget(solaris_budget_t *budget);
-cfg_node_t *cfg_yaml_parse(cfg_context_t *c, const void *bytes, size_t length);
-cfg_node_t *cfg_yaml_expand(cfg_context_t *c, cfg_node_t *root);
+cfg_node_t *cfg_conf_parse(cfg_context_t *c, const void *bytes, size_t length);
 void cfg_image_compile(cfg_context_t *c, cfg_node_t *root);
-int cfg_scalar_numeric_kind(const cfg_node_t *node);
+void cfg_dns_compile(cfg_context_t *c, cfg_node_t *root);
+cfg_node_t *cfg_field(cfg_node_t *map, const char *name);
+int cfg_is_null(const cfg_node_t *node);
+const char *cfg_text(cfg_context_t *c, cfg_node_t *map, const char *key, const char *path, int required, size_t limit,
+                     int allow_empty);
+const char *cfg_string_value(cfg_context_t *c, cfg_node_t *node, const char *path, size_t limit, int allow_empty);
+int cfg_bool(cfg_context_t *c, cfg_node_t *map, const char *key, const char *path, int fallback);
+uint64_t cfg_uint(cfg_context_t *c, cfg_node_t *map, const char *key, const char *path, uint64_t fallback, uint64_t low,
+                  uint64_t high, int required);
+void cfg_fields(cfg_context_t *c, cfg_node_t *map, const char *path, const char *const *names, size_t count);
 solaris_status_t solaris_config_compile_bytes_services(const void *bytes, size_t length,
                                                        const solaris_config_options_t *options,
                                                        const solaris_runtime_services_t *services,

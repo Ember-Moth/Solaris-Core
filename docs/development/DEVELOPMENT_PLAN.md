@@ -8,24 +8,24 @@
 不承担完整配置、隐式行为、控制 API 或功能清单的复刻目标。协议互通、资源安全和设备验证仍是交付门槛。
 
 M0–M2 的实现与验收按当时范围保留；其中 YAML/固定 mihomo 差分属于已有成果，不构成 `.conf` 已实现的证据。
-当前代码仍含 YAML 入口及未提交的 M3 实现；下列调整是后续实施计划，不在本次修改解析器、样例文件或测试注册。
+当前工作树已完成 CFG 原生配置迁移，仍保留未提交的 M3 基础实现；完整 M3、真机和远端 CI 不由本次本机配置验收推导。
 
 ## 1. 当前状态
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 项目定位与配置方向 | 已确定独立内核与 Solaris Conf；迁移待实施 | `.conf` 借鉴 Surge 的分节书写方式，自身语义见 2.1；不承诺 Surge/mihomo 配置直接兼容 |
+| 项目定位与配置方向 | 已切换独立内核与 Solaris Conf v1 | `.conf` 借鉴 Surge 的分节书写方式，自身语义见 2.1；不承诺 Surge/mihomo 配置直接兼容 |
 | 历史文档归档 | 已完成 | 原 README、嵌入说明、四份草案与调查证据 |
 | M0 新工程骨架、Solaris 命名与基础 SDK | 已提交并推送 `8fa5180`，CI 通过 | 新 CMake/模块清单、私有 libuv、异步生命周期与安装消费 |
 | M1 框架与首批数据面 | M1-01–M1-08 的实现与本机功能验收完成 | M1 基线四种构建各 40 项；后续 TLS 扩展矩阵为 45 项，见下方记录 |
 | TLS 库扩展 | 五个补丁已实现，本机验收通过 | 四协议独立握手/交接测试；生产出站和配置接入仍分开推进 |
 | 协议补全与 TUN | XUDP 恢复、SS2022 ChaCha/EIH、多用户与 AnyTLS 协商/会话已补齐；TUN 内部数据面提前实现 | lwIP/system、平台设备层及边界见 [TUN 用法](TUN.md)；插件仅预留接口 |
 | M2 | 按原阶段范围完成实现与本机功能验收 | SDK、控制/观测与配置事务保留；YAML 差分记录见 5.11；原生 `.conf` 单列 CFG 任务 |
-| CFG 原生配置迁移 | 待实施 | CFG-01–04：规范、解析/模型、SDK/宿主切换、原生验收与旧入口隔离 |
+| CFG 原生配置迁移 | CFG-01–04 已完成实现与本机验收 | 原生编译、统一模型、SDK/宿主、29 个模型/路由样本；旧 parser/libyaml 移除、参考工具归档 |
 | M3 | 已有工作区基础实现，整合未完成 | 先收口已有 DNS/Fake-IP/bridge/platform 改动；通过 CFG 门槛后按原生配置接线，24 组验收按新口径执行 |
 | M4–M6 | 未开始，按需求排期 | 策略/资源管理、协议/平台、性能；不以补齐第三方功能清单为目标 |
-| 新 SDK/生命周期/安装消费验收 | macOS arm64 通过 | 共享/静态、完整 40 项、独立 C/C++ 消费、ASan/UBSan 与 TSan；详见最终记录 |
-| 远端 CI | 修复提交已推送，主线全绿状态待重新核对 | `8c26229`、`7a05406` 已入主线；CFG-00 以当前提交和实际 job 结果复验，不沿用旧通过记录 |
+| 新 SDK/生命周期/安装消费验收 | macOS arm64 原生配置验收通过 | 本次共享 99 项、静态安装/配置 6 项、裁剪 47 项、相关 ASan/UBSan 21 项；更早记录保留在对应阶段 |
+| 远端 CI | 最新远端 `7a05406` 仍失败；对应 GCC/MSVC 修复已在工作区保留 | 已核对 run `42381442723`，详情见 2.1；本次尚未提交/推送，不能声称远端全绿 |
 | 代理协议互通、设备与性能验收 | M1 声明组合的常规互通通过；设备/性能未验收 | 长重复 Xray UDP 存在独立控制端也可复现的外部限制，不宣称生产稳定性 |
 
 本计划不承诺未经测量的工期和吞吐。各阶段按依赖与验收推进；普通开发不要求保留原接口兼容。
@@ -49,7 +49,7 @@ flowchart LR
 | M0 | 正常构建、安装、调用的新 Solaris 最小库 | G-BUILD、基础 G-LIFE | 已完成本机与 CI 验收 |
 | M1 | 模块注册、统一 I/O、UDP association、至少两个 workers；新增协议不改通用层 | G-MODULE、G-LIFE、G-WORKER、基础 G-UDP/G-INTEROP | 实现与本机功能验收完成；远端 CI 未运行，长重复限制见下文 |
 | M2 | 宿主加载配置、代理、切组、查询和关闭连接 | 原阶段 G-CONFIG/G-RELOAD/G-INTEROP | 原 YAML 范围已完成；控制与事务继续复用，记录见 5.11 |
-| CFG | Solaris Conf v1、统一类型模型和安装宿主 | 原生 G-CONFIG、G-RELOAD、安装消费 | 新增迁移任务，`.conf` 尚未实现 |
+| CFG | Solaris Conf v1、统一类型模型和安装宿主 | 原生 G-CONFIG、G-RELOAD、安装消费 | 已完成实现与本机验收；远端 CI 随后续提交复验 |
 | M3 | 原生配置驱动 DNS/Fake-IP、双栈 TUN 与 Android/Apple VPN | G-CONFIG/G-LIFE/G-WORKER/G-UDP/G-DEVICE 的 M3 范围 | 已有基础组件，完整接线与设备验收待完成 |
 | M4 | 有实际需求的策略、规则资源与状态存储 | 每项对应 G-CONFIG/G-RELOAD/G-INTEROP | 待需求排序，不设全量第三方配置覆盖指标 |
 | M5 | 更多协议/传输与 Windows/Linux/OpenHarmony 集成 | 新增组合 G-INTEROP、各平台 G-BUILD/G-DEVICE | 未开始 |
@@ -72,17 +72,38 @@ flowchart LR
 | CFG-04 原生验收与旧入口隔离 | 用规范样本、内部模型一致性及真实行为接替原生配置门禁；评估旧 YAML/parser/oracle/libyaml 的实际引用后移出默认入口与默认门禁 | `.conf` 成为默认配置；无解析失败后隐式回退；剩余旧工具位置、用途与构建依赖明确，完整测试能力不缩水 |
 
 实施顺序为 **CFG-00 → CFG-01 → CFG-02/03 → CFG-04 与 M3 联调**。不重新编号或重新打开已完成的 M2；迁移有自己的验收状态。
-已完成的 DNS wire、hosts/cache、Fake-IP lease、stream bridge、socket policy 等格式无关组件可在此期间继续回归和收口；
-新的配置耦合工作等待 CFG-01 的模型冻结，M3 对外完成须通过 CFG-03/04。
+原生模型已冻结，DNS wire、hosts/cache、Fake-IP lease、stream bridge、socket policy 等已有组件继续保留。
+M3 可在该模型上继续集成；加密 DNS URI、Fake-IP 答复、TUN/设备闭环仍须取得各自证据。
 
 迁移保留边界：
 
 - 复用 C SDK、owner/scope、协议、TUN 数据面、观测与配置发布；不为更换文本格式重写这些模块。
 - 停止新增 mihomo 默认值/隐式回退/字段别名/配置加载器逐项对齐任务；Surge 也不成为新的行为复制目标。
-- 已有 YAML 代码和差分测试在原生入口替代前保留，避免留下不能构建的中间态；本轮不新增长期双格式兼容层或自动转换器。
+- 原生入口替代后已移除 YAML parser/libyaml 默认构建，旧对照工具隔离到 tests/archive/yaml；本轮不新增长期双格式兼容层或自动转换器。
 - CFG-04 逐项转移仍有价值的诊断、资源上限、引用、取消、热更新与协议用例，再移除仅为旧格式服务的默认测试/依赖。
   历史 176 个差分样本保留原验收含义，不把它们改写为 `.conf` 已通过。
 - 旧格式导入、配置转换或第三方 API 兼容只有在明确需求下作为独立外围工具排期，不进入内核的完成条件。
+
+### 本次 CFG 落地与验证（2026-11-13）
+
+- CFG-00：迁移前工作区完整构建及 101 项本机测试通过。最新远端 [42381442723](https://github.com/Ember-Moth/Solaris-Core/actions/runs/42381442723) 对应 `7a05406`：macOS 两项、三项裁剪及 fuzz 通过；Ubuntu/sanitizer 在 config dump 的 misleading-indentation 失败，Windows 在 SS capability 的混合 enum 警告失败。工作区已保留对应修复；未推送本批代码，未重新取得 Linux/Windows 远端结论。
+- CFG-01/02：冻结 8 个已实现段、字段/默认值/单位/限额；自有 lexer/AST 直接编译 owned 模型。移除 YAML 隐式类型和 AnyTLS 0–5 秒归一化；原生时间字段使用明确毫秒。保留诊断、内存预算、分配失败回滚、并发与输入所有权覆盖。
+- CFG-03：bytes/file、安装样例、运行时测试切为原生输入。FINAL 必须显式且末尾；无规则配置不能通过 mode 控制或 reload 继承进入 rule；FINAL 无 UDP 能力时返回错误。增加对应控制/提交回滚和真实 route job 回归。
+- CFG-04：移除旧 parser、私有 libyaml shim、构建 recipe、主依赖锁与默认差分注册；完整历史样本/Go 锁/overlay 位于 tests/archive/yaml。协议/监听/观测/取消/热更新和安装消费覆盖继续保留。
+
+本次结果对应当前未提交工作树，平台为 macOS arm64、Homebrew Clang 23.1.5；不把未提交源码与远端 `7a05406` 混为同一产物。
+
+| 构建/检查 | 结果与范围 | 证据 |
+| --- | --- | --- |
+| build-m3-base，共享完整构建 | 99/99；包含原生格式、M3 已有组件、代理互通、发布/取消和搬迁安装宿主 | build-m3-base/conf-tests.log |
+| build-conf-static | 6/6 配置/模块符号/搬迁安装消费；纯 C 与 C++ 消费及高级协议矩阵由安装检查执行 | build-conf-static/conf-tests.log |
+| build-conf-pruned，全出站与 TLS 裁剪 | 47/47；配置入口明确报告不可用能力，安装与导出边界保留 | build-conf-pruned/conf-tests.log |
+| build-conf-asan | 相关 21 项均取得通过；补齐禁用监听样本的显式 FINAL 后，受影响测试及安装宿主复验通过；无 ASan/UBSan 报告 | build-conf-asan/conf-tests.log、conf-retest.log |
+| 原生模型与实际路由 | 29 个显式预期样本，覆盖所有基础 matcher、延迟 DNS、能力过滤、最终动作及格式拒绝 | build-m3-base/config-native.json |
+| 原生 fuzz | 最终代码运行 61 秒、593143 次输入，ASan/UBSan 插桩；无 sanitizer/断言错误 | build-m3-base/conf-fuzz.log |
+
+初轮并行回归暴露测试端口冲突/UDP 超时，单独复验通过；DNS 和高级协议对端增加 TCP/UDP 与另一地址族的端口占位后，最终并行 99 项通过。
+本次不宣称 M3 完成、设备 VPN 可用、跨平台 CI 全绿或生产稳定性；已有 DoH/DoT/Fake-IP/平台组件的接线缺口继续按第 6 节推进。
 
 ### 2.2 独立行为契约与验收来源
 

@@ -7,7 +7,10 @@
 /* A carrier factory has no knowledge of the proxy protocol using it. The
  * factory and its context are borrowed for open. A factory must copy/retain
  * any settings it needs later before open returns.
- * Like I/O, rejection returns a null output and schedules no callbacks. */
+ * Like I/O, rejection returns a null output and schedules no callbacks.
+ * When options.parent_scope is supplied, factories with asynchronous cleanup
+ * must honor its same-owner fence even after a rejected open. Accepted on_close
+ * alone does not establish that a rejected factory's native resources drained. */
 typedef struct solaris_stream_factory {
     void *context;
     solaris_status_t (*open)(void *context, solaris_executor_t *owner,

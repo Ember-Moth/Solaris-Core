@@ -123,16 +123,21 @@ static void start(void *context, solaris_status_t status)
 int main(void)
 {
     char input[] =
-        "mode: rule\n"
-        "proxies:\n"
-        "  - {name: tcp-only, type: socks5, server: 127.0.0.1, port: 1080, udp: false}\n"
-        "proxy-groups:\n"
-        "  - {name: chosen, type: select, proxies: [tcp-only, DIRECT]}\n"
-        "rules:\n"
-        "  - DOMAIN-SUFFIX,example.com,chosen\n"
-        "  - NETWORK,udp,DIRECT\n"
-        "  - IP-CIDR,127.0.0.0/8,REJECT,no-resolve\n"
-        "  - MATCH,DIRECT\n";
+        "[General]\n"
+    "config-version = 1\n"
+    "mode = rule\n"
+    "\n"
+    "[Proxy]\n"
+    "\"tcp-only\" = socks5, \"127.0.0.1\", \"1080\", udp-relay=\"false\"\n"
+    "\n"
+    "[Proxy Group]\n"
+    "\"chosen\" = select, \"tcp-only\", \"DIRECT\"\n"
+    "\n"
+    "[Rule]\n"
+    "DOMAIN-SUFFIX,example.com,chosen\n"
+    "NETWORK,udp,DIRECT\n"
+    "IP-CIDR,127.0.0.0/8,REJECT,no-resolve\n"
+    "FINAL,DIRECT\n";
     solaris_config_t *config;
     solaris_diagnostics_t *diagnostics;
     solaris_error_t error;
@@ -186,6 +191,6 @@ int main(void)
     solaris_config_release(config);
     CHECK(solaris_budget_used(budget) == 0);
     solaris_budget_release(budget);
-    puts("YAML image -> real module configs -> two-owner route plans, UDP filtering and revisions passed");
+    puts("Conf image -> real module configs -> two-owner route plans, UDP filtering and revisions passed");
     return 0;
 }

@@ -191,6 +191,7 @@ static void release_storage(solaris_engine_t *engine)
     if (engine->executors)
         services.deallocate(services.context, engine->executors);
     solaris_budget_release(engine->budget);
+    solaris_network_snapshot_release(engine->host.network);
     services.deallocate(services.context, engine);
 }
 static int custom(const solaris_runtime_operation_t *operation)
@@ -686,6 +687,7 @@ solaris_status_t solaris_runtime_create(const solaris_engine_options_t *options,
     }
     if (host != NULL) {
         engine->host = *host;
+        solaris_network_snapshot_retain(engine->host.network);
     }
     engine->started_ns = now_ns(engine);
     engine->state = SOLARIS_ENGINE_IDLE;
@@ -943,4 +945,14 @@ solaris_status_t solaris_runtime_destroy(solaris_engine_t *engine, solaris_error
     uv_mutex_destroy(&engine->mutex);
     release_storage(engine);
     return solaris_error_set(error, SOLARIS_OK, 0, NULL);
+}
+
+solaris_network_snapshot_t *solaris_runtime_network_acquire(solaris_engine_t *engine)
+{
+    if (!engine) return NULL;
+    uv_mutex_lock(&engine->mutex);
+    solaris_network_snapshot_t *network = engine->host.network;
+    solaris_network_snapshot_retain(network);
+    uv_mutex_unlock(&engine->mutex);
+    return network;
 }

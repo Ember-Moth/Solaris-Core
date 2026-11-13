@@ -44,6 +44,7 @@ solaris_status_t solaris_proxy_transport_init(const solaris_proxy_config_t *conf
     memset(transport, 0, sizeof(*transport));
     solaris_status_t rc = solaris_dialer_config_apply(&config->dialer, &services->dialer, &transport->dialer);
     if (rc != SOLARIS_OK) return rc;
+    transport->dialer.lookup_view.role = SOLARIS_DNS_PROXY_SERVER;
     transport->server = config->server; transport->carrier = services->carrier;
     memcpy(transport->identity, config->identity, sizeof(transport->identity));
     transport->tls = config->tls;

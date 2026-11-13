@@ -67,6 +67,7 @@ static solaris_status_t create(const void *compiled, const solaris_module_servic
     socks5_outbound_t *node = solaris_memory_allocate(solaris_executor_budget(services->owner), sizeof(*node)); if (node == NULL) return SOLARIS_ENOMEM;
     memset(node, 0, sizeof(*node)); *state = node;
     solaris_status_t rc = solaris_dialer_config_apply(&config->dialer, &services->dialer, &node->dialer); if (rc != SOLARIS_OK) return rc;
+    node->dialer.lookup_view.role = SOLARIS_DNS_PROXY_SERVER;
     node->server = config->server; node->credentials = config->credentials; node->carrier = services->carrier;
     node->outbound = (solaris_outbound_t){&operations, node, services->owner}; *out = &node->outbound; return SOLARIS_OK;
 }

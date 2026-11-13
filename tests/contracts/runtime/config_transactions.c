@@ -160,10 +160,19 @@ static void fixture_destroy(fixture_t *f)
 }
 static solaris_config_t *compile(uint16_t port)
 {
-    char yaml[128]; int size = snprintf(yaml, sizeof(yaml), "mode: direct\nmixed-port: %u\nbind-address: 127.0.0.1\n", port);
+    char binding[64];
+    if (port) (void)snprintf(binding, sizeof(binding), "127.0.0.1:%u", port);
+    else (void)snprintf(binding, sizeof(binding), "off");
+    char conf[512]; int size = snprintf(conf, sizeof(conf), "[General]\n"
+    "config-version = 1\n"
+    "mode = direct\n"
+    "mixed-listen = \"%s\"\n"
+    "\n"
+    "[Rule]\n"
+    "FINAL,DIRECT\n", binding);
     solaris_config_t *image; solaris_diagnostics_t *diagnostics = NULL; solaris_error_t error;
-    CHECK(solaris_config_compile_bytes(yaml, (size_t)size, NULL, &image, &diagnostics, &error) == SOLARIS_OK);
-    solaris_diagnostics_release(diagnostics); memset(yaml, 0xff, sizeof(yaml)); return image;
+    CHECK(solaris_config_compile_bytes(conf, (size_t)size, NULL, &image, &diagnostics, &error) == SOLARIS_OK);
+    solaris_diagnostics_release(diagnostics); memset(conf, 0xff, sizeof(conf)); return image;
 }
 static void prepare_submit(operation_t *operation, solaris_config_t *image, int ephemeral)
 {

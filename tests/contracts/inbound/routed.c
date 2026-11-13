@@ -265,7 +265,7 @@ static solaris_status_t create_view(fixture_t *f, uint32_t revision, uint32_t au
     v->udp = udp;
     atomic_init(&v->refs, 0);
     CHECK(solaris_route_rule_compile("IP-CIDR", "127.0.0.0/8", 0, 1, &v->rules[0], NULL) == SOLARIS_OK);
-    CHECK(solaris_route_rule_compile("MATCH", NULL, 0, 2, &v->rules[1], NULL) == SOLARIS_OK);
+    CHECK(solaris_route_rule_compile("FINAL", NULL, 0, 2, &v->rules[1], NULL) == SOLARIS_OK);
     solaris_proxy_inbound_options_t options = f->base;
     options.owner = f->owner;
     options.parent_scope = &f->service;

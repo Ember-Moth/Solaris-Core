@@ -79,6 +79,7 @@ void solaris_config_retain(solaris_config_t *c)
 void solaris_config_release(solaris_config_t *c)
 {
     if (c && atomic_fetch_sub_explicit(&c->references, 1, memory_order_acq_rel) == 1) {
+        if (c->dns) solaris_hosts_release(c->dns->validated_hosts);
         cfg_arena_clear(&c->arena);
         solaris_memory_free(c);
     }
@@ -164,3 +165,6 @@ const char *solaris_config_source_name(const solaris_config_t *c)
 {
     return c ? c->source_name : NULL;
 }
+
+const solaris_config_dns_t *solaris_config_dns(const solaris_config_t *config)
+{ return config ? config->dns : NULL; }

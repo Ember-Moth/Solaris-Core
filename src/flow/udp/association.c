@@ -208,6 +208,8 @@ static void release_route_context(association_t *entry)
     entry->route_options.release = NULL;
     entry->route_options.rules = NULL;
     entry->route_options.rule_count = 0;
+    memset(&entry->route_options.dial_lookup, 0, sizeof(entry->route_options.dial_lookup));
+    memset(&entry->route_options.dial_lookup_view, 0, sizeof(entry->route_options.dial_lookup_view));
 }
 static void destroy_entry(void *context)
 {
@@ -228,6 +230,7 @@ static void destroy_entry(void *context)
     mapping_t *mapping = entry->mappings;
     while (mapping != NULL) {
         mapping_t *next = mapping->next;
+        assert(mapping->request == NULL);
         solaris_memory_free(mapping);
         mapping = next;
     }
@@ -263,8 +266,11 @@ static void cancel_entry(void *context)
         cancel_lane(&entry->lanes[i]);
     for (mapping_t *mapping = entry->mappings; mapping != NULL; mapping = mapping->next) {
         cancel_lane(&mapping->lane);
-        if (mapping->request != NULL)
-            entry->dispatcher->options.cancel_resolve(entry->dispatcher->options.context, mapping->request);
+        if (mapping->request != NULL) {
+            const solaris_dns_lookup_t *lookup = &entry->route_options.dial_lookup;
+            if (lookup->start) lookup->cancel(lookup->context, mapping->request);
+            else entry->dispatcher->options.cancel_resolve(entry->dispatcher->options.context, mapping->request);
+        }
     }
     schedule(entry);
 }
@@ -467,23 +473,32 @@ static void resolved(void *context, solaris_status_t status, const solaris_addre
     association_t *entry = mapping->association;
     mapping->request = NULL;
     if (!entry->closing) {
+        int captured_lookup = entry->route_options.dial_lookup.start != NULL;
         if (status == SOLARIS_OK && solaris_executor_now_ns(entry->owner) >= mapping->due)
             status = SOLARIS_ETIMEDOUT;
         if (status == SOLARIS_OK) {
-            /* Prefer IPv4 for the minimal system-resolver path, with IPv6
-             * fallback. DNS policy and configurable racing are later layers. */
+            if (!count) status = SOLARIS_EIO;
+            else if (count > SOLARIS_RESOLVER_MAX_ADDRESSES) status = SOLARIS_EOVERFLOW;
+            else if (!addresses) status = SOLARIS_EINVAL;
+        }
+        if (status == SOLARIS_OK) {
+            /* Validate the complete borrowed result before selecting anything.
+             * Captured DNS service results already carry family policy/order.
+             * The legacy dispatcher resolver keeps its original IPv4 bias. */
             size_t selected = count;
             for (size_t i = 0; i < count; ++i) {
-                if (addresses[i].family == SOLARIS_ADDRESS_IPV4) {
-                    selected = i;
+                solaris_address_t numeric;
+                if (normalize_address(&addresses[i], &numeric, 1) != SOLARIS_OK) {
+                    status = SOLARIS_EINVAL;
                     break;
                 }
-                if (addresses[i].family == SOLARIS_ADDRESS_IPV6 && selected == count)
+                if (selected == count || (!captured_lookup && addresses[i].family == SOLARIS_ADDRESS_IPV4 &&
+                                         addresses[selected].family != SOLARIS_ADDRESS_IPV4))
                     selected = i;
             }
-            if (selected == count)
+            if (status == SOLARIS_OK && selected == count)
                 status = SOLARIS_EIO;
-            else {
+            else if (status == SOLARIS_OK) {
                 status = normalize_address(&addresses[selected], &mapping->actual, 1);
                 mapping->actual.port = mapping->original.port;
             }
@@ -493,7 +508,8 @@ static void resolved(void *context, solaris_status_t status, const solaris_addre
         uv_mutex_lock(&entry->dispatcher->mutex);
         mapping->failed_through = entry->stats.accepted;
         uv_mutex_unlock(&entry->dispatcher->mutex);
-        schedule(entry);
+        if (captured_lookup && solaris_dns_lookup_terminal(status)) close_entry(entry, status);
+        else schedule(entry);
     }
     solaris_scope_release(&entry->scope);
 }
@@ -533,9 +549,17 @@ static solaris_status_t get_mapping(association_t *entry, const packet_t *packet
         solaris_status_t rc = due_after(entry, entry->dispatcher->options.dns_timeout_ms, &mapping->due);
         if (rc == SOLARIS_OK) {
             solaris_scope_retain(&entry->scope);
-            rc = entry->dispatcher->options.resolve(entry->dispatcher->options.context, entry->owner,
-                                                    &mapping->original, entry->dispatcher->options.dns_timeout_ms,
-                                                    resolved, mapping, &mapping->request);
+            const solaris_dns_lookup_t *lookup = &entry->route_options.dial_lookup;
+            if (lookup->start) {
+                solaris_dns_lookup_view_t view = entry->route_options.dial_lookup_view;
+                view.role = SOLARIS_DNS_DIRECT_TARGET;
+                rc = lookup->start(lookup->context, entry->owner, &view, &mapping->original,
+                                   mapping->due, resolved, mapping, &mapping->request);
+            } else {
+                rc = entry->dispatcher->options.resolve(entry->dispatcher->options.context, entry->owner,
+                                                        &mapping->original, entry->dispatcher->options.dns_timeout_ms,
+                                                        resolved, mapping, &mapping->request);
+            }
             if (rc != SOLARIS_OK)
                 solaris_scope_release(&entry->scope);
         }
@@ -545,6 +569,7 @@ static solaris_status_t get_mapping(association_t *entry, const packet_t *packet
             uv_mutex_lock(&entry->dispatcher->mutex);
             mapping->failed_through = entry->stats.accepted;
             uv_mutex_unlock(&entry->dispatcher->mutex);
+            if (entry->route_options.dial_lookup.start && solaris_dns_lookup_terminal(rc)) close_entry(entry, rc);
         }
     }
     return SOLARIS_OK;
@@ -611,7 +636,10 @@ static solaris_status_t initialize_entry(association_t *entry, const solaris_add
         entry->routing = 1;
         solaris_scope_retain(&entry->scope);
         rc = solaris_route_start(&entry->route_options, &entry->route_job);
-        release_route_context(entry);
+        /* The route job owns its own context lease. A captured dial resolver
+         * additionally needs this association lease for destinations first seen
+         * after routing/reload, through the final lookup/channel callbacks. */
+        if (!entry->route_options.dial_lookup.start) release_route_context(entry);
         if (rc != SOLARIS_OK) {
             entry->routing = 0;
             solaris_scope_release(&entry->scope);
@@ -889,7 +917,9 @@ static solaris_status_t submit(solaris_udp_dispatcher_t *dispatcher, const solar
     if (entry == NULL && routed &&
         (!route || route->owner != owner || !route->acquire || route->mode < SOLARIS_MODE_RULE ||
          route->mode > SOLARIS_MODE_DIRECT || !route->timeout_ms ||
-         route->timeout_ms > UINT64_MAX / UINT64_C(1000000) || ((route->retain == NULL) != (route->release == NULL)))) {
+         route->timeout_ms > UINT64_MAX / UINT64_C(1000000) || ((route->retain == NULL) != (route->release == NULL)) ||
+         ((route->dial_lookup.start == NULL) != (route->dial_lookup.cancel == NULL)) ||
+         (route->dial_lookup.start && (!route->retain || !route->release)))) {
         rc = SOLARIS_EINVAL;
         goto done;
     }

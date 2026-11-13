@@ -7,7 +7,8 @@
         "src/api/common/error.c",
         "src/api/common/version.c",
         "src/api/observe/probe.c",
-        "src/api/observe/observe.c"
+        "src/api/observe/observe.c",
+        "src/api/platform/network.c"
       ],
       "dependencies": []
     },
@@ -45,10 +46,94 @@
         "src/transport/socket/udp.c",
         "src/transport/stream/carrier.c",
         "src/codec/address/socks.c",
-        "src/codec/address/vmess.c"
+        "src/codec/address/vmess.c",
+        "src/transport/socket/preparation.c"
       ],
       "dependencies": [
         "libuv"
+      ]
+    },
+    {
+      "name": "stream_bridge",
+      "sources": [
+        "src/transport/stream/bridge.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "io",
+        "runtime"
+      ]
+    },
+    {
+      "name": "dns_wire",
+      "sources": [
+        "src/codec/dns/name.c",
+        "src/codec/dns/wire.c",
+        "src/codec/dns/build.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "runtime"
+      ]
+    },
+    {
+      "name": "dns_hosts",
+      "sources": [
+        "src/dns/hosts/snapshot.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "io",
+        "runtime"
+      ]
+    },
+    {
+      "name": "dns_cache",
+      "sources": [
+        "src/dns/cache/cache.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "dns_wire",
+        "runtime"
+      ]
+    },
+    {
+      "name": "dns_exchange",
+      "sources": [
+        "src/dns/exchange/exchange.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "dns_wire",
+        "io",
+        "runtime"
+      ]
+    },
+    {
+      "name": "dns_service",
+      "sources": [
+        "src/dns/service/view.c",
+        "src/dns/service/service.c",
+        "src/dns/service/lookup.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "dns_cache",
+        "dns_hosts",
+        "dns_exchange",
+        "runtime"
+      ]
+    },
+    {
+      "name": "fakeip",
+      "sources": [
+        "src/dns/fakeip/pool.c"
+      ],
+      "dependencies": [],
+      "requires": [
+        "io",
+        "runtime"
       ]
     },
     {
@@ -425,20 +510,19 @@
       ]
     },
     {
-      "name": "yaml_config",
+      "name": "conf_config",
       "sources": [
-        "src/config/yaml/allocator.c",
-        "src/config/yaml/parser.c",
+        "src/config/conf/parser.c",
         "src/config/image/api.c",
         "src/config/image/memory.c",
-        "src/config/image/compile.c"
+        "src/config/image/compile.c",
+        "src/config/image/dns.c"
       ],
-      "dependencies": [
-        "libyaml"
-      ],
+      "dependencies": [],
       "requires": [
         "route_policy",
-        "registry"
+        "registry",
+        "dns_hosts"
       ]
     }
   ],
@@ -452,7 +536,8 @@
     "include/solaris/control.h",
     "include/solaris/observe.h",
     "include/solaris/probe.h",
-    "include/solaris/log.h"
+    "include/solaris/log.h",
+    "include/solaris/platform.h"
   ],
   "exports": [
     "solaris_engine_create",
@@ -510,6 +595,16 @@
     "solaris_log_snapshot_retain",
     "solaris_log_snapshot_release",
     "solaris_log_snapshot_get_info",
-    "solaris_log_snapshot_get_record"
+    "solaris_log_snapshot_get_record",
+    "solaris_socket_policy_complete",
+    "solaris_platform_get_capabilities",
+    "solaris_network_options_init",
+    "solaris_network_snapshot_create",
+    "solaris_network_snapshot_retain",
+    "solaris_network_snapshot_release",
+    "solaris_network_snapshot_get_info",
+    "solaris_network_snapshot_get_dns_server",
+    "solaris_network_snapshot_get_host",
+    "solaris_network_snapshot_get_host_address"
   ]
 }

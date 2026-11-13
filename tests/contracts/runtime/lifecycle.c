@@ -144,7 +144,7 @@ static solaris_engine_t *create(fixture_t *f, capture_t *c, uint32_t capacity)
     solaris_engine_options_init(&options);
     options.command_capacity = capacity;
     solaris_runtime_services_t runtime = services(f);
-    solaris_host_t host = {c, event_cb};
+    solaris_host_t host = {.context = c, .on_event = event_cb};
     solaris_error_t error;
     CHECK(solaris_runtime_create(&options, &host, &runtime, &engine, &error) == SOLARIS_OK);
     CHECK(engine != NULL && error.code == SOLARIS_OK && error.message[0] == '\0');

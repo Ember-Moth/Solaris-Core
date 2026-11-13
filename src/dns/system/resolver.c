@@ -6,6 +6,7 @@
 
 struct solaris_resolve {
     solaris_scope_t scope;
+    solaris_scope_t *parent;
     solaris_deferred_t result;
     uv_getaddrinfo_t native;
     solaris_deadline_t *deadline;
@@ -37,7 +38,13 @@ static void cancel(void *context)
     if (request->deadline != NULL) solaris_deadline_cancel(request->deadline);
 }
 
-static void destroy(void *context) { solaris_memory_free(context); }
+static void destroy(void *context)
+{
+    solaris_resolve_t *request = context;
+    solaris_scope_t *parent = request->parent;
+    solaris_memory_free(request);
+    if (parent) solaris_scope_release(parent);
+}
 
 static void publish(solaris_resolve_t *request, solaris_status_t status)
 {
@@ -82,7 +89,8 @@ static void resolved(uv_getaddrinfo_t *native, int status, struct addrinfo *addr
     solaris_scope_release(&request->scope);
 }
 
-solaris_status_t solaris_resolve_start(solaris_executor_t *executor,
+solaris_status_t solaris_resolve_start_scoped(solaris_executor_t *executor,
+                                       solaris_scope_t *parent_scope,
                                        const solaris_address_t *target, uint64_t timeout_ms,
                                        solaris_resolve_fn callback, void *context,
                                        solaris_resolve_t **out)
@@ -90,7 +98,8 @@ solaris_status_t solaris_resolve_start(solaris_executor_t *executor,
     if (out == NULL) return SOLARIS_EINVAL;
     *out = NULL;
     if (executor == NULL || target == NULL || callback == NULL) return SOLARIS_EINVAL;
-    if (!solaris_executor_is_owner(executor)) return SOLARIS_ETHREAD;
+    if (!solaris_executor_is_owner(executor) || (parent_scope && parent_scope->owner != executor)) return SOLARIS_ETHREAD;
+    if (parent_scope && (parent_scope->cancelled || parent_scope->finishing)) return SOLARIS_ECLOSED;
     if (target->family != SOLARIS_ADDRESS_DOMAIN && target->family != SOLARIS_ADDRESS_IPV4 &&
         target->family != SOLARIS_ADDRESS_IPV6) return SOLARIS_EINVAL;
     if (target->family == SOLARIS_ADDRESS_DOMAIN &&
@@ -100,6 +109,8 @@ solaris_status_t solaris_resolve_start(solaris_executor_t *executor,
     memset(request, 0, sizeof(*request));
     solaris_status_t rc = solaris_scope_init(&request->scope, executor, cancel, destroy, request);
     if (rc != SOLARIS_OK) { solaris_memory_free(request); return rc; }
+    request->parent = parent_scope;
+    if (request->parent) solaris_scope_retain(request->parent);
     request->target = *target;
     request->callback = callback;
     request->context = context;
@@ -132,6 +143,13 @@ solaris_status_t solaris_resolve_start(solaris_executor_t *executor,
     request->pending = 1; request->accepted = 1;
     *out = request;
     return SOLARIS_OK;
+}
+
+solaris_status_t solaris_resolve_start(solaris_executor_t *executor,
+    const solaris_address_t *target, uint64_t timeout_ms,
+    solaris_resolve_fn callback, void *context, solaris_resolve_t **out)
+{
+    return solaris_resolve_start_scoped(executor, NULL, target, timeout_ms, callback, context, out);
 }
 
 void solaris_resolve_cancel(solaris_resolve_t *request)

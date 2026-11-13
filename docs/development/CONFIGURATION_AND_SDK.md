@@ -1,77 +1,200 @@
 # 原生配置与宿主 SDK
 
-状态：2026-11-13 更新的目标规范。Solaris Core 采用独立内核定位，原生配置定为 Surge 风格的 `.conf`；
-当前源码仍有 YAML 入口，原生解析器与宿主切换按 [CFG 计划](DEVELOPMENT_PLAN.md#21-原生配置迁移与近期优先级) 实施。
-具体可调用接口见 [当前 SDK](SDK.md)，本页的新设计不表示已可运行。
+Solaris Conf v1 是当前字节/文件入口的原生格式。下面第 1–2 节定义已实现的语法、字段和编译边界；
+第 3–7 节同时保留后续 DNS/TUN/平台能力的设计方向，具体状态见 [开发计划](DEVELOPMENT_PLAN.md)。
+公开调用和生命周期约定见 [SDK](SDK.md)。
 
-## 1. 原生配置与范围
+## 1. Solaris Conf v1
 
-格式名称为 **Solaris Conf v1**。借鉴 Surge 的 INI-like 分节及逐行声明，字段含义、默认值、策略和错误处理由 Solaris 自身规范决定。
-不承诺完整 Surge 或 mihomo 配置可直接加载，也不复制其控制 API、管理配置、脚本或全部功能。
-Surge 的格式仅作书写方式参考：[Profile Format](https://manual.nssurge.com/profile/format.html)。
+采用 INI-like 分节和逐行声明，借鉴 Surge 的[书写形式](https://manual.nssurge.com/profile/format.html)。
+语义由 Solaris 定义，不承诺 Surge 或 mihomo 文件兼容。文件扩展名不参与格式探测；字节与文件入口均只接受本规范。
 
-### 1.1 v1 规范任务
+### 1.1 词法与诊断
 
-以下作为 CFG-01 的规范基线，CFG-02 实现后才能声明支持：
+- 输入必须为 UTF-8，允许文件开头的 BOM；接受 LF/CRLF，不接受单独 CR、NUL、其他控制字节或中间 BOM。列号从 1 开始，按 UTF-8 字节计数。
+- 段名使用下表的精确拼写，每个段最多一次。段前允许空白，段标题内不加空白。字段与名称区分大小写；节点、组、监听和认证 profile 名称支持 UTF-8，长度为 1–127 字节。
+- 行首/行尾未引用的空格与 tab 被 trim。双引号覆盖整个 token；只定义 `\"` 和 `\\` 转义，其他转义与拼接引号报错。引号内空白保留，`""` 表示显式空字符串。
+- `名称 = 值` 在引号外第一个等号处分隔；列表在引号外的逗号处分隔；参数在引号外第一个等号处分隔。参数值中的后续等号属于内容。没有 YAML 隐式类型、anchors、merge 或变量展开。
+- `#`、`;`、`//` 可在行首或引号外且前有空白处开始注释。`https://x/a#fragment` 不被截断；含空白加注释字符、逗号、引号的凭据必须引用。`#!include` 等 `#!` 指令明确返回不支持。
+- 字段 schema 决定类型，引用不会改变类型：`true` 与 `"true"` 在布尔字段中都为 true；仅接受小写 true/false。无符号整数仅接受十进制数字，前导零仍按十进制；不接受正负号、下划线、十六进制或单位后缀。字符串中的 `00123`、`true`、`null` 均原样保留。
+- 未知段/字段/能力返回 `SOLARIS_ENOTSUP`；语法、重复项、缺失字段、值或引用错误返回 `SOLARIS_EINVAL`；输入/结构限额返回 `SOLARIS_EOVERFLOW`；总内存预算或分配失败返回 `SOLARIS_ENOMEM`。
+- 词法诊断使用 PARSE 阶段，字段/模型诊断使用 NORMALIZE 阶段；包含 source、段/条目/字段路径与行列。重复键另给出首次位置。诊断不包含凭据原文或未知字段原文。
 
-- UTF-8 文本，允许文件开头的 UTF-8 BOM，支持 LF/CRLF；首版不支持隐式续行、多行值或宏展开。
-- 每个段最多声明一次；段名和字段名使用规范中的固定拼写。节点/组名支持 UTF-8，区分大小写；trim 规则与引号保留范围明确。
-- `[General]` 中显式填写 `config-version = 1`；未知版本、未知段/键、重复键/名称和无效引用报错，不静默忽略。
-- `key = value` 在引号外的首个等号处分隔；逗号列表只在引号外切分；参数值中的后续等号按字段内容保留。
-- 双引号包裹值，定义 `\"` 与 `\\` 转义；未知转义、未闭合引号和不完整参数报错。密码/URL/含逗号名称必须无损保留。
-- 支持 `#`、`;`、`//` 注释；行内分隔符必须在引号外且前有空白，不能截断 `https://`、带片段的 URL 或引号内凭据。
-- 字段 schema 决定值类型；布尔值采用 true/false，数值为十进制，时间/容量单位由字段规范声明。缺省、空值和零值分别定义。
-- `[Rule]` 保持文件顺序。规则模式要求唯一、位于最后的 `FINAL`；未匹配动作显式填写，不由第三方默认行为补齐。
-- 规则/参数只接受已经声明的能力；`#!include` 等管理指令显式报不支持，不当普通注释吞掉。远程 include、脚本、MITM 和托管 profile 不属于 v1。
+### 1.2 段与入口
 
-### 1.2 段与实施批次
-
-| 段 | 职责 | 首批范围 |
+| 段 | 内容 | 支持状态 |
 | --- | --- | --- |
-| `[General]` | 版本、基本运行配置和默认监听 | CFG：仅保留宿主实际需要且能生效的设置，不把所有开关堆在全局段 |
-| `[Proxy]` | `名称 = 协议, 地址, 端口, 参数...` | CFG：接已有 Direct/Reject/SOCKS5/SS/VLESS/AnyTLS 的已验证组合 |
-| `[Proxy Group]` | 命名策略与成员引用 | CFG：手动 select；自动策略和组嵌套按实际需求进入 M4 |
-| `[Rule]` | 有序匹配与明确最终动作 | CFG：已有基础 matcher 与 FINAL；引用/循环/能力检查统一 |
-| `[Host]` | 静态地址与别名 | M3：定义自身匹配、别名、优先级及系统快照的边界 |
-| `[DNS]` | resolver、上游、缓存和策略 | M3：按角色与真实实现逐项开放，不继承外部隐式服务器/回退 |
-| `[TUN]` | 实际 backend 与宿主接入需求 | M3：明确设备能力、packet/FD、MTU、地址族和变更计划；不自动取得系统权限 |
+| `[General]` | 版本、初始模式、三个快捷监听、默认认证 profile | 必须出现 |
+| `[Proxy]` | 命名出站记录 | direct、reject、socks5、ss、vless、anytls；受构建裁剪约束 |
+| `[Proxy Group]` | 命名手动选择组 | 平面 select，成员只能是出站节点 |
+| `[Rule]` | 有序规则行 | 基础 matcher 与唯一且末尾的 FINAL |
+| `[Listener]` | 命名 HTTP/SOCKS5/mixed 监听 | 多监听、UDP 开关、独立认证选择 |
+| `[Authentication]` | 命名用户密码集合 | 可被 General/Listener 引用 |
+| `[DNS]` | 现有内部 DNS 服务配置 | 数值 UDP/TCP 上游、解析角色、hosts/cache；详见 1.7 |
+| `[Host]` | 数值地址集合或域名别名 | 双栈、多地址、别名与循环检测 |
 
-`[DNS]`、`[TUN]` 等是 Solaris 的原生组织方式，段名不构成对 Surge 同名功能的兼容承诺。
-段内详细字段、端口禁用/临时绑定、时间默认值及名称引用表在 CFG-01 冻结；未实现的段不能提前被解析成成功但无行为的配置。
+`[TUN]`、远程 include、脚本、MITM、托管 profile、Provider 与未列出的段不被接受。
+TUN 内部组件或加密 DNS 组件的存在不表示其原生配置入口已经交付。
 
-下面是用于冻结规范的目标样例，**尚不是当前解析器可执行的配置文件**：
+### 1.3 General
+
+| 字段 | 值与缺省 | 空值/零值 |
+| --- | --- | --- |
+| `config-version` | 必填，精确值 `1` | 其他值拒绝 |
+| `mode` | `rule`（缺省）、`global`、`direct` | 空值拒绝 |
+| `http-listen` / `socks-listen` / `mixed-listen` | 数字 `IPv4:port` 或 `[IPv6]:port`；缺省或 `off` 不创建对应监听 | port 仅 1–65535；0 拒绝 |
+| `authentication` | `[Authentication]` 中的 profile 名称；缺省或 `""` 无认证 | 不接受不存在的 profile |
+
+快捷监听的名称分别为 `http`、`socks`、`mixed`。HTTP 无 UDP；SOCKS5/mixed 默认启用 UDP。
+快捷监听与命名监听共享名称/地址检查，重复名称或完全相同的已启用 endpoint 拒绝。
+宿主需要临时端口时，在 prepare 中按已有 listener ID 显式覆盖为端口 0；这不会使 `off` 的监听出现。
+
+rule 模式要求 `[Rule]`；direct/global 可以不带规则。没有规则的配置不能通过控制 API 切到 rule。
+reload 保留当前模式：若提交时仍为 rule 而候选没有规则，提交失败并保留旧配置；不隐式重置模式或补入 Direct。
+
+### 1.4 Proxy
 
 ```ini
-[General]
-config-version = 1
-http-listen = 127.0.0.1:7890
-socks-listen = 127.0.0.1:7891
-
 [Proxy]
+Local = direct, udp-relay=true
+Blocked = reject
 Node = ss, proxy.example.com, 443, encrypt-method=aes-128-gcm, password="example-password", udp-relay=true
+```
 
+远程协议的前三个位置依次为协议、地址、端口；direct/reject 只有协议位置。地址是数值 IP 或域名，端口 1–65535。
+其余均为不重复的 `参数=值`。公共参数 `udp-relay` 控制配置的实际 UDP 能力：direct/reject 缺省 true，其他协议缺省 false。
+远程协议可填 `network=tcp`，缺省或空字符串均使用 TCP；其他 carrier 返回不支持。direct/reject 只接受 udp-relay。
+内置 `DIRECT`、`REJECT` 以及自动生成的 `GLOBAL` 是保留名称；节点与组共用名称空间。
+
+| 协议 | 字段、单位和缺省 |
+| --- | --- |
+| socks5 | 可选 `username`、`password` 必须成对出现，各为 1–255 字节；无字段表示无认证 |
+| ss | 必填 `encrypt-method`、`password`；支持现有 AEAD/2022 密钥校验。`udp-over-tcp` 缺省 false；启用时必须显式 `udp-over-tcp-version=2`，无 v1 |
+| vless | 必填 `uuid`，32 位十六进制或标准带连字符格式。`tls` 缺省 false，`encryption` 缺省/`none` 为无协议加密。`flow` 缺省/空为基础 VLESS，可用 `xtls-rprx-vision` 或 `xtls-rprx-vision-udp443`，必须有 TLS 或 VLESS encryption。`tls-server-name` 只在 TLS 开启时接受；`packet-encoding` 缺省或 `xudp` |
+| anytls | 必填 `password`，可选 `tls-server-name`，始终使用 TLS。`idle-session-timeout-ms` 与 `idle-session-check-interval-ms` 各缺省 30000，范围 1–3600000 毫秒；小值按原值生效，0 拒绝。`min-idle-session` 缺省 0，范围 0–64 |
+
+密码与 SS 密钥文本上限 1024 字节，VLESS encryption 文本上限 16383 字节。
+TLS 根证书由宿主 prepare 的 PEM 参数注入；配置不读取证书、私钥或系统信任，不接受关闭证书验证的开关。
+协议组合和独立对端范围见 [能力矩阵](COMPATIBILITY.md)。
+
+### 1.5 Proxy Group 与 Rule
+
+```ini
 [Proxy Group]
 Exit = select, Node, DIRECT
 
 [Rule]
 DOMAIN-SUFFIX,example.com,Exit
-FINAL,DIRECT
+IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+FINAL,REJECT
 ```
 
-## 2. 配置流水线与迁移
+select 至少一个成员，初始选择第一个；重复成员、无效引用、组嵌套和循环拒绝。内置 GLOBAL 包含全部节点，初始选择 DIRECT。
+规则保持文件顺序；普通行是 `类型,匹配值,目标[,no-resolve]`，FINAL 是 `FINAL,目标`。
+只要声明 Rule，就必须有唯一且位于末尾的 FINAL；不接受 MATCH 别名。
 
-`Solaris Conf → lexer/parser 与源位置 AST → schema/名称/引用/能力校验 → owned 类型化配置 → prepare → commit → retire`
+支持 DOMAIN、DOMAIN-SUFFIX、DOMAIN-KEYWORD、IP-CIDR、IP-CIDR6、SRC-IP-CIDR、SRC-PORT、DST-PORT、NETWORK。
+域名 matcher 使用 ASCII，按现有域名规范化处理大小写与尾点；目标可以是内置节点、自定义节点或组。
+端口 matcher 接受 0–65535 单值或递增闭区间 `起点-终点`；NETWORK 接受 tcp/udp（也接受 TCP/UDP）。
+`no-resolve` 只对 CIDR 规则可用；源地址 CIDR 本来就不触发目标解析。目的 IP 匹配最多触发一次延迟 DNS。
 
-C SDK 消费同一个配置模型，配置文件不是运行时的数据结构；后续若提供直接类型化构建入口，必须复用同一语义校验与默认值。
-文件/字节输入保留明确的 source/base-directory，错误包含段、键/条目和行列；错误信息与日志不输出密码、私钥或 token 原文。
-输入字节、行长、token、条目、嵌套引用及诊断数量分别限额；语法和静态检查不联网、不读外部资源、不绑定监听或创建设备。
+普通规则匹配的节点无 UDP 能力时继续下一条；FINAL 是终止动作，其所选节点无所需能力时返回 ENOTSUP，不能再隐式改走 Direct。
+选路及控制状态在新连接/association 接纳时固定，已有流的生命周期不因文件格式变化而改变。
 
-- 原生编译器直接构建公共模型，不先转换成 mihomo YAML 再调用旧解析器，不把第三方 schema 固化成内部标准。
-- 新默认入口与旧 YAML 入口必须明确区分，不能在 `.conf` 失败后隐式尝试 YAML；CFG-03 冻结 API/调用约定并迁移安装样例。
-- 现有 YAML 实现暂留以维持迁移期间的构建和回归。CFG-04 完成后，按实际引用将其及专属参考工具/依赖移出默认库与默认门禁；不新增长期双格式维护义务。
-- 旧格式导入若有明确需求，作为独立外围适配器输出公共模型；当前迁移不额外交付转换器。
-- 宿主对监听、TUN 和网络能力的覆盖显式声明，结果包含请求、覆盖与生效值；不可用功能返回明确错误，不自动改为 Direct 或其他 backend。
-- 配置格式变化不改变连接所有权、取消屏障或已建立流的路由；改变这些行为须单独设计和回归。
+### 1.6 Listener 与 Authentication
+
+```ini
+[Authentication]
+LocalUsers = alice="p,a=ss", bob="another password"
+
+[Listener]
+Web = http, 127.0.0.1, 7890, authentication=LocalUsers
+Socks = socks5, ::1, 7891, udp-relay=true, authentication=LocalUsers
+Public = mixed, 127.0.0.1, 7892, authentication=""
+```
+
+监听前三个位置为 `http/socks5/mixed,数字地址,端口`。与 Proxy 的端口一样仅 1–65535，地址不经过 DNS。
+SOCKS5/mixed 可用 udp-relay，缺省 true；HTTP 上出现该字段即报不支持。
+authentication 缺省继承 General；显式 `""` 禁用认证；填 profile 则替换继承集合。
+
+Authentication 每个 profile 是逗号分隔的 `用户名=密码` 列表，至少一个用户；用户名与密码各为 1–255 字节。
+同一集合内的重复用户名拒绝。用户名中的等号、逗号可以整体引用；冒号是普通字符，不用于切分凭据。
+即使 profile 暂未被监听引用，其内容也进行完整校验。
+
+### 1.7 DNS 与 Host
+
+```ini
+[DNS]
+enabled = true
+upstream = udp://127.0.0.1:5353, tcp://[::1]:5353
+proxy-upstream = 127.0.0.2
+ipv6 = true
+ipv6-wait-ms = 100
+
+[Host]
+api.example = 127.0.0.2, ::1
+alias.example = api.example
+```
+
+DNS 的所有上游必须是数字 IP，裸地址默认 UDP/53；也接受 `udp://`、`tcp://` 与显式端口。
+多个上游按顺序作传输故障切换。启用时必须显式设置 upstream，不内置公网 DNS，也不在该模式下回退系统查询。
+`enabled=false` 且宿主未要求 strict DNS 时，运行时可以使用系统 resolver；strict DNS 要求宿主提供网络快照、保护回调与有效上游。
+启用 DNS 且保留 `use-system-hosts=true` 时，prepare 要求显式宿主网络快照；没有该快照可设置 `use-system-hosts=false`。
+
+| 字段 | 支持范围/缺省 |
+| --- | --- |
+| `enabled` / `ipv6` | false / false |
+| `use-hosts` / `use-system-hosts` | true / true；系统 hosts 来自宿主快照 |
+| `ipv6-wait-ms` | 100 毫秒，0–10000 |
+| `upstream` | 客户端查询及路由目标的上游列表，最多 16 个 |
+| `direct-upstream` / `proxy-upstream` / `bootstrap-upstream` | 独立角色列表；缺省使用显式 upstream 集合，不添加其他服务器 |
+| `mode` | 缺省或 normal；Fake-IP 答复尚未接线 |
+| `cache-algorithm` | 缺省或 lru |
+| `cache-size` | 缺省/0 使用现有 4096 项上限，也可显式 4096；其他值暂不支持 |
+| `listen` | 缺省或空字符串；非空 DNS 监听尚未接线 |
+
+Host 单值可以是数值地址或域名别名；多个值必须全部是无 scope 的数值地址，IPv4-mapped IPv6 会归一为 IPv4，地址顺序与重复项保留。
+Host 名称为 ASCII，折叠大小写、去除一个尾点；每个 label 最多 63 字节，完整名称最多 253 字节。
+从右向左逐 label 匹配时先精确分支，再整 label 的 `*`，再前导 `.`（一个或更多 label）；`+.` 同时声明基础名称和后缀。
+不支持部分 label 通配、非 ASCII 或自动 IDNA。规范化后的重复模式（含 +. 展开重叠）与别名环拒绝。
+配置命中后不会因为地址族或别名结果缺失再落到系统 hosts；配置未命中才查询宿主系统层。内置 localhost 为 127.0.0.1，可由配置覆盖。
+别名在所属层内解析；外部终止别名保留为后续查询目标，编译时不联网。每项最多 16 个地址、别名最多 32 跳，配置与默认 hosts 合计最多 4096 项。
+加密 DNS URI、nameserver-policy、Fake-IP 答复及 TUN 自动接线不在当前原生配置范围，组件测试不能替代这些能力的验收。
+
+### 1.8 输入预算
+
+通过 `solaris_config_options_init` 获取默认值；调用方填 0 使用默认。所有 AST、解码字符串、image 与诊断分配共享内存预算。
+
+| 选项 | 缺省 | 可设置上限 |
+| --- | --- | --- |
+| input_limit_bytes | 1 MiB | 64 MiB |
+| memory_limit_bytes | 16 MiB | 由宿主指定 |
+| string_limit_bytes | 64 KiB | 64 MiB；单 token 的引用内容解码前字节数，协议字段另有较低上限 |
+| line_limit_bytes | 64 KiB | 64 MiB；不含 LF/CRLF |
+| node_limit | 65536 | 1048576；AST 节点总数 |
+| entry_limit | 16384 | 1048576；非空、非注释的段/声明行数 |
+| diagnostic_limit | 64 | 1024 |
+
+首版没有递归语法、include、alias 或组嵌套，不保留旧 YAML 的 depth/alias 限额选项。
+source_name 上限 511 字节，base_directory 上限 4095 字节；选项元数据无效时返回 EINVAL。
+
+## 2. 配置流水线与宿主切换
+
+`Solaris Conf → lexer/parser 与源位置 AST → 字段/名称/引用/能力校验 → owned 类型化配置 → prepare → commit → retire`
+
+`src/config/conf/` 直接构建源位置 AST，`src/config/image/` 生成模块私有字段、规则、组和监听等 owned 模型。
+没有先生成 YAML 的过程。运行时不读取文本 AST，也不依赖第三方 schema；未来类型化构建 API 必须复用同一语义校验。
+当前 C SDK 通过 `solaris_config_compile_bytes/file` 使用这一编译器，函数名保留但输入格式已切换，旧 YAML 不再接受。
+
+字节入口不访问网络、文件、证书、监听或设备；文件入口只读取显式指定的一份有界文件。source/base_directory 在返回前复制，
+base_directory 仅作为来源元数据保留，当前字段不加载外部资源。image 与 diagnostics 有独立 retain/release；释放 AST 不影响输出。
+错误文本不回显凭据，公开配置快照不含密码，内存回收清零编译 arena。
+
+旧 YAML parser、libyaml 私有 shim 和构建依赖已移除；M2 的参考程序、Go locks、176 个差分样本与原依赖信息保存在
+[历史测试目录](../../tests/archive/yaml/README.md)，不进入默认构建、CI、安装或 fuzz。历史通过记录不改写为原生配置证据。
+原生格式失败后不会回退旧格式；本次不提供格式转换器或导入适配器。
+
+宿主的监听覆盖继续报告 configured/requested/actual；配置更新继续复用现有资源所有权、取消屏障和旧流保活机制。
 
 ## 3. 路由、策略和 DNS
 

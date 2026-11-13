@@ -20,8 +20,8 @@ from runtime_control import live, wait_for, for_socket, u64, closed
 from websocket import frame, read_frame
 
 
-def apply(runtime, yaml, ephemeral=False, expected=0):
-    prepared = runtime.prepare(0, yaml, ephemeral=ephemeral, expected=expected)
+def apply(runtime, conf, ephemeral=False, expected=0):
+    prepared = runtime.prepare(0, conf, ephemeral=ephemeral, expected=expected)
     if prepared['status']:
         return prepared, None
     revision = runtime.commit(0)['revision']
@@ -95,9 +95,9 @@ class SocksUdpPeer(Peer):
 def routing_and_udp(runtime, ports, first, second, without_socks):
     web, socks = ports
     base = config(web, socks)
-    filtering = base.replace('rules: ["MATCH,DIRECT"]',
-        'proxies: [{name: tcp-only, type: direct, udp: false}]\n'
-        'rules: ["NETWORK,udp,tcp-only", "MATCH,DIRECT"]')
+    filtering = base.replace('[Rule]\nFINAL,DIRECT',
+        '[Proxy]\ntcp-only=direct,udp-relay=false\n'
+        '[Rule]\nNETWORK,udp,tcp-only\nFINAL,DIRECT')
     _, revision = apply(runtime, filtering)
     direct = next(node['id'] for node in runtime.command('G')['nodes'] if node['name'] == 'DIRECT')
     control, bound = udp_control(socks)
@@ -107,22 +107,22 @@ def routing_and_udp(runtime, ports, first, second, without_socks):
         record = data_record(runtime, client)
         assert record['node'] == direct and record['rule'] == 1 and record['revision'] == revision
     end_control(runtime, control)
-    _, revision = apply(runtime, base.replace('rules: ["MATCH,DIRECT"]', 'rules: ["DOMAIN,unmatched.invalid,REJECT"]'))
+    _, revision = apply(runtime, base.replace('[Rule]\nFINAL,DIRECT', '[Rule]\nDOMAIN,unmatched.invalid,REJECT\nFINAL,DIRECT'))
     tcp = Peer(echo)
     with http_tunnel(web, tcp) as stream:
-        assert_echo(stream, b'legitimate-no-match-direct')
+        assert_echo(stream, b'explicit-final-direct')
         record = for_socket(runtime, stream)
-        assert record['rule'] == (1 << 64) - 1 and record['node'] == direct
+        assert record['rule'] == 1 and record['node'] == direct
     control, bound = udp_control(socks)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
         client.bind(('127.0.0.1', 0)); udp_exchange(client, bound, first, b'udp-no-match')
-        assert data_record(runtime, client)['rule'] == (1 << 64) - 1
+        assert data_record(runtime, client)['rule'] == 1
     end_control(runtime, control); tcp.check()
 
     peer = SocksUdpPeer()
-    routed = base.replace('rules: ["MATCH,DIRECT"]',
-        f'proxies: [{{name: forwarded, type: socks5, server: 127.0.0.1, port: {peer.port}, udp: true}}]\n'
-        f'rules: ["DST-PORT,{second.port},forwarded", "MATCH,DIRECT"]')
+    routed = base.replace('[Rule]\nFINAL,DIRECT',
+        f'[Proxy]\nforwarded=socks5,127.0.0.1,{peer.port},udp-relay=true\n'
+        f'[Rule]\nDST-PORT,{second.port},forwarded\nFINAL,DIRECT')
     if without_socks:
         apply(runtime, routed, expected=-3)
         print('SOCKS5 outbound is intentionally disabled: reverse UDP peer case not applicable', flush=True)
@@ -180,7 +180,7 @@ def routing_and_udp(runtime, ports, first, second, without_socks):
         if not without_socks:
             assert peer.forwarded.empty()
     end_control(runtime, control)
-    print('SDK R02/U01: UDP capability filtering, DIRECT fallback, reverse first-target routing and invalid fragment/source passed', flush=True)
+    print('SDK R02/U01: UDP capability filtering, explicit FINAL, reverse first-target routing and invalid fragment/source passed', flush=True)
     # Each old control has completed UDP ASSOCIATE but has no data association.
     # Removal/disable must deny its first valid packet, independently of auth.
     for removal in (False, True):
@@ -289,20 +289,20 @@ def websocket_reload(runtime, ports):
     print('SDK L02: verified WSS and framed WS retain their old plan across reload; new flows use REJECT', flush=True)
 
 
-def zero_ports(runtime, tcp):
-    yaml = 'mode: direct\nport: 18080\nsocks-port: 18081\nmixed-port: 18082\n'
-    prepared, revision = apply(runtime, yaml, ephemeral=True)
+def disabled_listeners(runtime, tcp):
+    conf = '[General]\nconfig-version=1\nmode=direct\nhttp-listen=127.0.0.1:18080\nsocks-listen=127.0.0.1:18081\nmixed-listen=127.0.0.1:18082\n[Rule]\nFINAL,DIRECT\n'
+    prepared, revision = apply(runtime, conf, ephemeral=True)
     ports = by_name(prepared)
     assert set(ports) == {'http', 'socks', 'mixed'} and all(item['port'] for item in ports.values())
     streams = [http_tunnel(ports[name]['port'], tcp) for name in ('http', 'mixed')]
     from runtime_proxy import socks_tcp
     streams.append(socks_tcp(ports['socks']['port'], tcp))
-    prepared, removed = apply(runtime, 'mode: direct\nport: 0\nsocks-port: 0\nmixed-port: 0\n')
+    prepared, removed = apply(runtime, '[General]\nconfig-version=1\nmode=direct\nhttp-listen=off\nsocks-listen=off\nmixed-listen=off\n[Rule]\nFINAL,DIRECT\n')
     assert removed > revision and not prepared['listeners'] and not runtime.command('Q')['listeners']
     for info in ports.values(): no_admission(info['port'])
     for stream in streams:
-        assert_echo(stream, b'zero-port-removes-only-new-admission'); stream.close()
-    print('SDK L01: nonzero HTTP/SOCKS/mixed -> zero removes listeners without ephemeral substitutes or killing old streams', flush=True)
+        assert_echo(stream, b'disabled-listener-removes-only-new-admission'); stream.close()
+    print('SDK L01: HTTP/SOCKS/mixed -> off removes listeners without ephemeral substitutes or killing old streams', flush=True)
 
 
 def test(binary, without_socks=False):
@@ -312,7 +312,7 @@ def test(binary, without_socks=False):
     listeners = by_name(prepared); ports = listeners['web']['port'], listeners['socks']['port']
     routing_and_udp(runtime, ports, first, second, without_socks)
     websocket_reload(runtime, ports)
-    zero_ports(runtime, tcp)
+    disabled_listeners(runtime, tcp)
     runtime.finish(); tcp.check(); first.check(); second.check()
     print('Uninstrumented public SDK route/listener acceptance passed', flush=True)
 

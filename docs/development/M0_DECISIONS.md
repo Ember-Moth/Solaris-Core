@@ -13,9 +13,9 @@
 | 项目 | 决定 | 当前是否编译 |
 | --- | --- | --- |
 | libuv | 1.53.0，固定提交及归档 SHA-256；私有静态链接进共享 SDK | 是 |
-| libyaml | 0.2.5，固定提交；M2 使用事件/节点解析，再由 Solaris 编译器落实 mihomo 语义与输入预算 | 否 |
+| libyaml（历史选择） | M2 曾使用 0.2.5；CFG 迁移后 parser/shim/依赖移除，当前使用自有 Conf lexer/parser | 否 |
 | yyjson | 0.12.0，固定提交；用于后续 JSON 诊断/便利接口，不替代原生 C 类型 | 否 |
-| mihomo | 固定 Herta 提交，作为后续差分测试参考 | 否 |
+| mihomo（历史参考） | M2 固定参考工具已移至 tests/archive/yaml，不进入原生默认门禁 | 否 |
 
 没有因命名复用而继承旧版本：libuv 选择本次核对的正式发布 1.53.0。共享/静态构建都使用相同固定源码，获取时校验内容 hash。CMake 官方的 `FETCHCONTENT_SOURCE_DIR_SOLARIS_UV` 可用于受控离线缓存；使用覆盖时由调用方确保来源与 lock 一致。
 

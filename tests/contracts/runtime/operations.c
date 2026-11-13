@@ -197,7 +197,7 @@ static void fixture_init(fixture_t *f, unsigned capacity)
     solaris_engine_options_init(&options);
     options.command_capacity = capacity;
     options.io_workers = 2;
-    solaris_host_t host = {f, event};
+    solaris_host_t host = {.context = f, .on_event = event};
     solaris_runtime_services_t services;
     solaris_runtime_services_init(&services);
     services.context = f;

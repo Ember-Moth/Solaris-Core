@@ -29,6 +29,9 @@ void *solaris_runtime_attachment_get(solaris_engine_t *engine);
 /* Control-owner only. Used for bounded asynchronous library work requests. */
 uv_loop_t *solaris_runtime_control_loop(solaris_engine_t *engine);
 uint32_t solaris_runtime_worker_count(solaris_engine_t *engine);
+/* Thread-safe owned capture while caller holds a valid engine lifetime. NULL
+ * means no host network view. The capture never activates platform resources. */
+solaris_network_snapshot_t *solaris_runtime_network_acquire(solaris_engine_t *engine);
 
 solaris_status_t solaris_runtime_create(
     const solaris_engine_options_t *options, const solaris_host_t *host,

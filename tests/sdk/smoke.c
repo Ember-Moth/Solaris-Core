@@ -18,7 +18,7 @@ int main(void)
 {
     solaris_engine_t *engine = NULL;
     solaris_error_t error;
-    solaris_host_t host = {NULL, event_cb};
+    solaris_host_t host = {.on_event = event_cb};
     solaris_engine_snapshot_t snapshot;
     uint64_t id;
     if (strlen(solaris_version_string()) == 0u ||

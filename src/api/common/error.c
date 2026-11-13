@@ -21,6 +21,7 @@ const char *solaris_status_string(solaris_status_t status)
     case SOLARIS_ETHREAD: return "operation requires the owning executor";
     case SOLARIS_EACCESS: return "socket policy or outbound denied the operation";
     case SOLARIS_EMSGSIZE: return "message exceeds the channel limit";
+    case SOLARIS_ENETWORK_CHANGED: return "network context changed";
     default: return "unknown Solaris status";
     }
 }

@@ -1,11 +1,11 @@
 # 当前 C SDK：配置、控制、观测与生命周期
 
-本页保留现有 SDK 与 YAML 宿主的使用说明。项目已选择独立内核与 Solaris Conf `.conf`，但原生入口尚未切换，不能将下方 YAML 样例直接改扩展名后使用。
-迁移任务见 [CFG 计划](DEVELOPMENT_PLAN.md#21-原生配置迁移与近期优先级)，原生目标规范见 [配置与宿主 SDK](CONFIGURATION_AND_SDK.md)；实现状态以开发计划为准。
+当前配置入口只接受 Solaris Conf v1 `.conf`。`solaris_config_compile_bytes/file` 的函数名保留，但输入格式和预算选项已切换；旧 Solaris Conf 不做自动探测或回退。
+完整字段与默认值见 [原生配置规范](CONFIGURATION_AND_SDK.md)，验证状态见 [开发计划](DEVELOPMENT_PLAN.md)。
 
 ## 构建与使用
 
-需要 CMake 3.24+、C11 编译器；测试还需要 Python 3.9+ 和 C++11 编译器。首次配置下载 lock 指定的 libuv、libyaml 及启用模块的依赖，之后同一构建目录可复用依赖。
+需要 CMake 3.24+、C11 编译器；测试还需要 Python 3.9+ 和 C++11 编译器。首次配置下载 lock 指定的 libuv 及启用模块的依赖，之后同一构建目录可复用依赖。
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
@@ -25,20 +25,20 @@ find_package(Solaris CONFIG REQUIRED)
 target_link_libraries(my_host PRIVATE Solaris::core)
 ```
 
-包含 `<solaris/core.h>`，或按需包含 config/control/observe/probe/log/engine/error/version 头文件。静态安装的私有依赖归档需要一并保留，链接由导出目标完成；共享包包含其私有实现，不向宿主暴露 libuv/libyaml API。
+包含 `<solaris/core.h>`，或按需包含 config/control/observe/probe/log/engine/error/version 头文件。静态安装的私有依赖归档需要一并保留，链接由导出目标完成；共享包包含其私有实现，不向宿主暴露 libuv 等私有依赖的 API。
 
 ## 安装后的 C 配置宿主
 
-安装包的 `share/Solaris/examples/config-host` 包含纯 C11 宿主、两份 loopback YAML 和独立 CMake 工程。
+安装包的 `share/Solaris/examples/config-host` 包含纯 C11 宿主、两份 loopback `.conf` 和独立 CMake 工程。
 可将该目录复制到任意位置，用安装前缀构建；源码仅包含公开的 `<solaris/core.h>`：
 
 ```sh
 cmake -S /path/to/config-host -B host-build -DCMAKE_PREFIX_PATH=/path/to/solaris-sdk
 cmake --build host-build
-./host-build/solaris_config_host /path/to/config-host/config_host.yaml --ephemeral
+./host-build/solaris_config_host /path/to/config-host/config_host.conf --ephemeral
 ```
 
-`--ephemeral` 将已启用的监听显式覆盖为临时端口，输出 configured/requested/actual；不改变 YAML 端口 0 的禁用语义。
+`--ephemeral` 将已启用的监听显式覆盖为临时端口，输出 configured/requested/actual；不启用 General 中缺省或 off 的监听。
 `--trust CA.pem` 提供 TLS/HTTPS 的显式信任。命令支持 `nodes`、`mode`、`select`、`probe`、`connections`、`traffic`、
 `logs`、`close`、`load`、`stop` 和 `start`；失败 load 保留旧配置，EOF/quit 排空并销毁。
 完整语法见 [样例说明](../../examples/config_host/README.md)。`installed_consumer` 会从搬迁后的包复制、独立构建并运行此样例。
@@ -58,13 +58,13 @@ cmake --build host-build
 | `solaris_status_string` | 返回静态状态说明 |
 | `solaris_version_string` | 返回产品版本字符串 |
 
-公开 SDK 通过离线 YAML 编译、prepare、commit 激活 HTTP/SOCKS5/mixed 代理；下文说明资源和事务边界。
+公开 SDK 通过离线 Solaris Conf 编译、prepare、commit 激活 HTTP/SOCKS5/mixed 代理；下文说明资源和事务边界。
 模式与节点选择、连接查询与关闭、流量、单次测速及日志通过下述公开接口访问；TUN 的宿主业务 API 继续后续工作包。
 内部 Direct 与系统 resolver 的边界见 [M1 实现说明](M1_DATA_PATH.md)。
 
-## 离线 YAML 编译
+## 离线 Solaris Conf 编译
 
-`solaris_config_compile_bytes` 编译有界内存中的 YAML，`solaris_config_compile_file` 读取一份有界文件再编译。
+`solaris_config_compile_bytes` 编译有界内存中的 Solaris Conf，`solaris_config_compile_file` 读取一份有界文件再编译。
 这两个入口是同步操作，应在宿主工作线程调用；不解析域名、建立 TLS、拨号或绑定监听端口。
 成功只表示产生不可变配置 image。编译失败时 config 为 NULL，诊断对象仍可能存在，必须释放。
 
@@ -98,11 +98,11 @@ int inspect_config(const char *path) {
 输入 bytes、options 字符串和 parser 生命周期均不被 image 借用。config/diagnostics 的 retain/release 可跨线程使用；
 `get_snapshot`、`get_node`、`diagnostics_get` 返回调用者持有的纯值拷贝，公开节点信息不含密码。
 `fingerprint` 是不包含凭据的非加密结构摘要，不能用于判断完整配置相等、跳过认证更新或安全校验。
-`source_name` 用于诊断，`base_directory` 用于资源引用；file 入口默认使用 YAML 所在目录。
+`source_name` 用于诊断，`base_directory` 用于资源引用；file 入口默认使用 Solaris Conf 所在目录。
 编译不读取证书或客户端密钥。TLS 的宿主 trust 在 prepare 中注入，不能把 mihomo 的客户端 `certificate/private-key` 当作 CA。
 
-输入字节、总分配预算、单字符串、递归深度、节点、alias 展开和诊断条数分别有上限，使用 options 初始化函数取得默认值。
-多文档、循环 alias、重复 key、未知转发功能与未编入模块明确报错；支持的范围和刻意差异见[兼容矩阵](COMPATIBILITY.md)。
+输入字节、总分配预算、单 token、行长、节点、声明条目和诊断条数分别有上限，使用 options 初始化函数取得默认值。
+未知版本/段/键、重复项、无效引用、未编入模块均明确报错；不再提供 YAML 的 depth_limit/alias_limit。支持范围见[能力矩阵](COMPATIBILITY.md)。
 
 ## 代理配置的准备与提交
 
@@ -125,13 +125,13 @@ int inspect_config(const char *path) {
 
 prepare 必须在已启动的 runtime 上执行。它可提前绑定并 listen，但候选端口不接纳代理协议业务；外部 TCP 握手可能成功后被关闭。
 每个物理监听由固定 worker 接纳；多个监听可分布到多个 worker。每个 worker 都有完整模块实例，单端口尚无跨 worker 接纳分发。
-`udp: false` 同时过滤选路能力并拒绝实际 datagram open。
+`udp-relay=false` 同时过滤选路能力并拒绝实际 datagram open。
 
 普通 TLS 节点要求 `trust_pem/trust_length` 提供显式 CA PEM，最多 256 KiB；缺失、无效或身份不匹配均失败。
-库不自动读取系统根证书，不关闭验证。YAML 外部证书资源、客户端证书以及额外 TLS 组合仍按兼容矩阵逐项接入。
+库不自动读取系统根证书，不关闭验证。Solaris Conf 外部证书资源、客户端证书以及额外 TLS 组合仍按兼容矩阵逐项接入。
 
 宿主可用 `bindings` 按已存在的 listener ID 覆盖数字地址和端口。地址 NULL 保留编译地址，端口 0 明确请求临时端口；
-这与顶层 YAML 端口 0 表示禁用不同。公开监听快照同时提供 configured、requested 和实际地址/端口，以及 `binding_overridden`。
+原生配置的端口 0 被拒绝，禁用快捷监听使用 off。公开监听快照同时提供 configured、requested 和实际地址/端口，以及 `binding_overridden`。
 固定端口相同的物理监听可以复用，逻辑入口交换端口和认证变更在 commit 一次切换；通配地址与具体地址的重叠变更返回 ENOTSUP，需 stop/start。
 
 同一 engine 同时只执行一项 prepare；另一项开始执行时若已有 prepare，会以 EBUSY 完成。可以依次准备并持有多个候选。
@@ -158,6 +158,7 @@ stop 清空 active、关闭全部业务资源并使未提交候选失效；重�
 执行时配置已变化则返回 EAGAIN；错误的组/成员或模式返回 EINVAL。成功结果提供 config/selection revision；
 模式或选择没有变化时保持 selection revision。手动选择不会被健康探测自动覆盖。
 模式/选择变化不推进 config revision，因此不会使只因控制变更而准备的候选失效。
+无 Rule 的 direct/global 配置不能切到 rule；提交候选时如需要保留的当前模式为 rule，候选也必须有显式 FINAL，否则返回 EINVAL 并保留旧配置。
 
 TCP 在接纳时固定控制视图，包含仍在协议握手或 DNS 阶段的连接；UDP 在首条有效包登记 association 时固定。
 后续切换只影响新的接纳；旧连接保持原 plan。reload 在提交点迁移当前模式和仍存在于新组的选中成员，
