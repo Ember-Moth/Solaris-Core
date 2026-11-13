@@ -1,6 +1,7 @@
 # 当前 C SDK：配置、控制、观测与生命周期
 
-本页描述当前已经实现的 API。完整目标能力见 [配置与宿主 SDK 设计](CONFIGURATION_AND_SDK.md)，完成状态见 [开发计划](DEVELOPMENT_PLAN.md)。
+本页保留现有 SDK 与 YAML 宿主的使用说明。项目已选择独立内核与 Solaris Conf `.conf`，但原生入口尚未切换，不能将下方 YAML 样例直接改扩展名后使用。
+迁移任务见 [CFG 计划](DEVELOPMENT_PLAN.md#21-原生配置迁移与近期优先级)，原生目标规范见 [配置与宿主 SDK](CONFIGURATION_AND_SDK.md)；实现状态以开发计划为准。
 
 ## 构建与使用
 

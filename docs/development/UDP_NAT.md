@@ -1,6 +1,6 @@
 # UDP association 与 NAT
 
-状态：当前开发规范；新实现尚未完成。源码核对与原实现探针见 [历史调查](../archive/2026-11-03/UDP_NAT_DESIGN.md)。
+状态：Solaris 独立数据面规范；基础关联已有实现，完整 DNS/Fake-IP/TUN 接线状态见 [开发计划](DEVELOPMENT_PLAN.md)。早期第三方调查见 [历史资料](../archive/2026-11-03/UDP_NAT_DESIGN.md)。
 
 ## 1. 模型与术语
 
@@ -33,9 +33,10 @@ association key 使用规范化二进制字段：`engine + inbound 实例/代际
 
 TUN 按命名空间内的源端点；SOCKS5 按 UDP ASSOCIATE 控制连接及已确认客户端源端点；具有连接 ID 的入站使用自己的逻辑身份。不同入站的同源地址不能串会话，客户端端口变化按入站协议处理。
 
-与所核对的 mihomo 通用 UDP 行为对齐，首次有效报文完成必要的 sniff/预处理后固定路由和最终节点。后续目的地分别解析/映射，复用同一个 plan；不默认逐目的地址重选策略。规则、节点与 Provider 更新影响新 association，存量通过明确的关闭/网络失效操作结束。
+Solaris 首个原生版本沿用已有的关联契约：首次有效报文完成必要预处理后固定路由和最终节点。后续目的分别解析/映射并复用同一个 plan。
+这是本项目当前的数据面选择；规则、节点与资源更新影响新关联，存量由显式关闭/网络失效结束。调整选路粒度需独立设计与回归，不由配置格式迁移暗中改变。
 
-例如，同一个 association 首次目的 A 匹配 Direct，后续目的 B 即使单独匹配时会走 Proxy，仍沿用该 association 的 Direct。该行为必须进入兼容测试；若未来提供逐目的选路，应是显式扩展。
+例如，同一个 association 首次目的 A 匹配 Direct，后续目的 B 即使单独匹配时会走 Proxy，仍沿用该 association 的 Direct。该行为必须进入原生契约测试；若未来需要逐目的选路，应单独定义。
 
 整个 association 固定一个 I/O worker。目的地改变不改变 worker、owner 或绑定；规则的 UDP 能力过滤与实际 open 使用同一 plan。
 
@@ -45,7 +46,8 @@ TUN 按命名空间内的源端点；SOCKS5 按 UDP ASSOCIATE 控制连接及已
 
 映射模式与过滤分别定义。endpoint-independent mapping 表示可复用范围内跨目标共用绑定；destination-dependent 模式可将目的纳入复用键。过滤决定接收哪些远端源地址/端口，不能从是否复用 socket 推导。
 
-默认 mihomo 对齐路径使用 association 复用。`endpoint-independent-nat: true` 请求对应能力，无法提供时明确报错；`false` 采用 backend 默认行为，不强制五元组独占 socket。实际模式和限制可查询，并用测试验证。
+原生路径采用 association 复用。若配置显式请求特定映射能力，实际 backend 必须满足，否则报告不支持；不能把开关名称当作实现证据。
+实际映射模式、过滤与限制可查询并通过对端验证。原生字段在 Conf 规范中定义，不沿用第三方无效开关。
 
 普通回复保留真实 peer，允许协议/策略支持的备用远端地址与端口；只有已建立的 DNAT 关系才进行地址恢复。不能把所有回包强制改成首包目的地，也不能为适配五元组而静默丢弃合法备用来源。
 
@@ -65,14 +67,14 @@ Fake-IP 租约在关联活跃期间不能回收给别的域名。多个原目标
 
 - 分别限制 association 数、每关联目的条目、待解析目标、排队包数/字节数和全局内存预算。
 - DNS、sniff、open 各有 deadline；idle 超时只管理有效存续的 association。
-- `tun.udp-timeout` 按秒作用于实际 TUN UDP association，默认 300 秒；显式覆盖应可观察。
+- TUN UDP idle 的单位、缺省和零值由原生 schema 统一规定并实际应用；配置值、宿主覆盖和生效值可观察。
 - 成功接纳/发送及符合策略的合法接收可刷新 idle；无效包、队列满和失败尝试不能无限延长状态。
 - 队列满丢包并计数，不因单次突发关闭整个可复用通道。EAGAIN 使用有界等待/丢弃，帧式 UDP 必须完整接纳 framing，不能重放已经部分写出的帧。
 - SOCKS5 控制连接关闭时终止相关 association；TUN 使用 idle、显式关闭和网络事件。
 - 关闭停止 admission，取消解析/握手，排空或释放队列与子通道，释放映射租约。删除表条目核对 ID/generation，旧回调不能删除同 key 的新对象。
 - 回收用有工作预算的 deadline 队列或时间轮；具体实现以负载测量确定。
 
-对照基准有通用 tunnel 固定 60 秒与 TUN 默认 300 秒分层不一致的现象，且固定 sing-tun 版本未发现读取 EIM 开关。Solaris 按上述明确契约实现和报告，不复制无效参数；差异登记为刻意修正，而非声称逐位复制基准。
+CFG 迁移核对当前不同入口的 timeout 与能力声明，统一到明确的 Solaris 契约；不以任何外部名义默认值代替实际运行行为。
 
 ## 6. 报文正确性与性能
 
@@ -88,4 +90,4 @@ Fake-IP 租约在关联活跃期间不能回收给别的域名。多个原目标
 
 实现从 M1 的 association/Direct 开始，在 M3 完成双栈 TUN、DNS 与 Fake-IP 接入。它不继承原实现的五元组 socket 模型或原私有配置格式。
 
-依据：[mihomo UDP sender](https://github.com/Herta-Network/mihomo/blob/9f121787bb563fe655d2789cbf6dbcc7ae19a0c9/tunnel/connection.go)、[UDP 编排](https://github.com/Herta-Network/mihomo/blob/9f121787bb563fe655d2789cbf6dbcc7ae19a0c9/tunnel/tunnel.go)、[RFC 4787](https://www.rfc-editor.org/rfc/rfc4787.html)、[TUN 配置](https://wiki.metacubex.one/config/inbound/tun/)。原实现缺口和本地探针不作为新代码已经实现的证据。
+参考资料（不定义当前原生语义）：[mihomo UDP sender](https://github.com/Herta-Network/mihomo/blob/9f121787bb563fe655d2789cbf6dbcc7ae19a0c9/tunnel/connection.go)、[UDP 编排](https://github.com/Herta-Network/mihomo/blob/9f121787bb563fe655d2789cbf6dbcc7ae19a0c9/tunnel/tunnel.go)、[RFC 4787](https://www.rfc-editor.org/rfc/rfc4787.html)、[TUN 配置](https://wiki.metacubex.one/config/inbound/tun/)。原实现缺口和本地探针不作为新代码已经实现的证据。

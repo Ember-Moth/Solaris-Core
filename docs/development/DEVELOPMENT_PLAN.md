@@ -1,21 +1,31 @@
 # Solaris Core 开发计划
 
-更新日期：2026-11-06。本文件是实现进度与阶段状态的唯一维护位置。
+更新日期：2026-11-13。本文件是实现进度与阶段状态的唯一维护位置。
+
+
+2026-11-13 方向调整：**Solaris Core 是面向应用嵌入的独立网络内核，原生配置采用 Surge 风格的 Solaris Conf `.conf`。**
+字段、默认值、选路、DNS 和生命周期行为由 Solaris 规范定义。mihomo、Surge、sing-box 等用于技术学习与独立对照，
+不承担完整配置、隐式行为、控制 API 或功能清单的复刻目标。协议互通、资源安全和设备验证仍是交付门槛。
+
+M0–M2 的实现与验收按当时范围保留；其中 YAML/固定 mihomo 差分属于已有成果，不构成 `.conf` 已实现的证据。
+当前代码仍含 YAML 入口及未提交的 M3 实现；下列调整是后续实施计划，不在本次修改解析器、样例文件或测试注册。
 
 ## 1. 当前状态
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 目标、框架、SDK、UDP/NAT 与多核设计整理 | 已完成文档基线 | 见 [文档索引](../README.md) |
+| 项目定位与配置方向 | 已确定独立内核与 Solaris Conf；迁移待实施 | `.conf` 借鉴 Surge 的分节书写方式，自身语义见 2.1；不承诺 Surge/mihomo 配置直接兼容 |
 | 历史文档归档 | 已完成 | 原 README、嵌入说明、四份草案与调查证据 |
 | M0 新工程骨架、Solaris 命名与基础 SDK | 已提交并推送 `8fa5180`，CI 通过 | 新 CMake/模块清单、私有 libuv、异步生命周期与安装消费 |
 | M1 框架与首批数据面 | M1-01–M1-08 的实现与本机功能验收完成 | M1 基线四种构建各 40 项；后续 TLS 扩展矩阵为 45 项，见下方记录 |
 | TLS 库扩展 | 五个补丁已实现，本机验收通过 | 四协议独立握手/交接测试；生产出站和配置接入仍分开推进 |
 | 协议补全与 TUN | XUDP 恢复、SS2022 ChaCha/EIH、多用户与 AnyTLS 协商/会话已补齐；TUN 内部数据面提前实现 | lwIP/system、平台设备层及边界见 [TUN 用法](TUN.md)；插件仅预留接口 |
-| M2 | 已完成实现与本机功能验收 | 完整配置差分、14 组验收及安装宿主已交付；未归因短包作为已知问题继续跟踪，见 5.11 |
-| M4–M6 | 未开始 | Provider、扩展协议、平台与性能继续按阶段推进 |
+| M2 | 按原阶段范围完成实现与本机功能验收 | SDK、控制/观测与配置事务保留；YAML 差分记录见 5.11；原生 `.conf` 单列 CFG 任务 |
+| CFG 原生配置迁移 | 待实施 | CFG-01–04：规范、解析/模型、SDK/宿主切换、原生验收与旧入口隔离 |
+| M3 | 已有工作区基础实现，整合未完成 | 先收口已有 DNS/Fake-IP/bridge/platform 改动；通过 CFG 门槛后按原生配置接线，24 组验收按新口径执行 |
+| M4–M6 | 未开始，按需求排期 | 策略/资源管理、协议/平台、性能；不以补齐第三方功能清单为目标 |
 | 新 SDK/生命周期/安装消费验收 | macOS arm64 通过 | 共享/静态、完整 40 项、独立 C/C++ 消费、ASan/UBSan 与 TSan；详见最终记录 |
-| 远端 CI | M0 CI 通过；M1 远端 CI 尚未验收 | 不把 M0 的通过状态延伸到新代码 |
+| 远端 CI | 修复提交已推送，主线全绿状态待重新核对 | `8c26229`、`7a05406` 已入主线；CFG-00 以当前提交和实际 job 结果复验，不沿用旧通过记录 |
 | 代理协议互通、设备与性能验收 | M1 声明组合的常规互通通过；设备/性能未验收 | 长重复 Xray UDP 存在独立控制端也可复现的外部限制，不宣称生产稳定性 |
 
 本计划不承诺未经测量的工期和吞吐。各阶段按依赖与验收推进；普通开发不要求保留原接口兼容。
@@ -24,25 +34,67 @@
 
 ```mermaid
 flowchart LR
-    M0[M0 工程与 SDK 骨架] --> M1[M1 可扩展多 worker 框架]
-    M1 --> M2[M2 YAML 与基础业务闭环]
-    M2 --> M3[M3 DNS / 双栈 TUN]
-    M3 --> M4[M4 日常配置覆盖]
-    M4 --> M5[M5 协议 / 平台扩展]
-    M5 --> M6[M6 高级协议与性能]
+    M0[M0 工程与SDK] --> M1[M1 数据面与协议]
+    M1 --> M2[M2 宿主控制与配置事务]
+    M2 --> CFG[CFG 原生conf与统一配置模型]
+    CFG --> M3[M3 DNS与双栈VPN闭环]
+    M3 --> M4[M4 按需策略与资源管理]
+    M3 --> M5[M5 按需协议与平台]
+    M4 --> M6[M6 性能测量与扩展]
+    M5 --> M6
 ```
 
 | 阶段 | 可交付结果 | 退出门槛 | 当前状态 |
 | --- | --- | --- | --- |
 | M0 | 正常构建、安装、调用的新 Solaris 最小库 | G-BUILD、基础 G-LIFE | 已完成本机与 CI 验收 |
 | M1 | 模块注册、统一 I/O、UDP association、至少两个 workers；新增协议不改通用层 | G-MODULE、G-LIFE、G-WORKER、基础 G-UDP/G-INTEROP | 实现与本机功能验收完成；远端 CI 未运行，长重复限制见下文 |
-| M2 | 宿主可加载基础 mihomo YAML、代理、切组、查询与关闭连接 | G-CONFIG、G-RELOAD、已声明协议 G-INTEROP | 已完成实现与本机功能验收；完整差分、逐项证据和已知问题见 5.11 |
-| M3 | DNS/Fake-IP、双栈 TUN 与 Android/Apple VPN 闭环 | 完整基础 G-UDP、相关 G-DEVICE | TUN 内部数据面已实现；DNS/Fake-IP/sniff/公开绑定和真机闭环未完成 |
-| M4 | Provider、完整常用策略组、Geo/rule-set 与日常配置样本覆盖 | 扩展 G-CONFIG/G-RELOAD/G-INTEROP | 未开始 |
+| M2 | 宿主加载配置、代理、切组、查询和关闭连接 | 原阶段 G-CONFIG/G-RELOAD/G-INTEROP | 原 YAML 范围已完成；控制与事务继续复用，记录见 5.11 |
+| CFG | Solaris Conf v1、统一类型模型和安装宿主 | 原生 G-CONFIG、G-RELOAD、安装消费 | 新增迁移任务，`.conf` 尚未实现 |
+| M3 | 原生配置驱动 DNS/Fake-IP、双栈 TUN 与 Android/Apple VPN | G-CONFIG/G-LIFE/G-WORKER/G-UDP/G-DEVICE 的 M3 范围 | 已有基础组件，完整接线与设备验收待完成 |
+| M4 | 有实际需求的策略、规则资源与状态存储 | 每项对应 G-CONFIG/G-RELOAD/G-INTEROP | 待需求排序，不设全量第三方配置覆盖指标 |
 | M5 | 更多协议/传输与 Windows/Linux/OpenHarmony 集成 | 新增组合 G-INTEROP、各平台 G-BUILD/G-DEVICE | 未开始 |
 | M6 | QUIC 等高级能力、栈扩展和有测量依据的性能策略 | 对应 G-INTEROP/G-DEVICE/G-PERF | 未开始 |
 
-门槛定义见 [测试规范](TESTING.md)。M2 是首个宿主业务可用的基础库目标；M4 是日常配置覆盖目标。任何阶段都不能自动推导成全量 mihomo 功能兼容。
+门槛定义见 [测试规范](TESTING.md)。配置、协议、平台和性能分别声明已验证范围；阶段完成不代表任何第三方产品的功能等价。
+
+### 2.1 原生配置迁移与近期优先级
+
+原生规范由 [配置与宿主 SDK](CONFIGURATION_AND_SDK.md) 维护，名称为 **Solaris Conf v1**。
+借鉴 `[General]`、`[Proxy]`、`[Proxy Group]`、`[Rule]` 的分节与逐行声明；DNS、Host、TUN 等段由 Solaris 按实际能力定义。
+`.conf` 编译到统一的 owned 配置模型，供 C SDK 与运行时消费；未来直接构建入口也复用同一校验。继续使用 `prepare → commit → retire`，运行时不读取文本格式或依赖第三方字段名。
+
+| 任务 | 交付 | 完成条件 |
+| --- | --- | --- |
+| CFG-00 主线与在途改动收口 | 核对当前 CI，修复剩余失败；逐组件确认未提交 M3 改动、测试与缺口，整理可构建边界 | 当前提交的 job 结果可追溯；不把部分组件或旧记录当整体验收，不因方向调整丢失已有修复 |
+| CFG-01 规范与类型模型 | 冻结 v1 段/字段、词法、默认值、单位、名称/引用、错误分类；审查当前 model 中仅为 mihomo 存在的约束 | 每项输入有明确结果和测试样本；内核语义由 Solaris 定义；文件与 C SDK 共用模型 |
+| CFG-02 原生解析与编译 | `src/config/conf/` 中的 lexer/parser、源位置 AST、类型检查、能力与引用校验、有界 owned image | 字节/文件入口纯编译；引号/逗号/等号/注释无歧义；预算、失败注入、fuzz 和源码位置通过 |
+| CFG-03 SDK与宿主切换 | 明确选择新格式的 C API/调用约定，迁移安装样例、测试宿主和有效配置查询，接已有事务/控制 API | 安装后的 `.conf` 宿主完成已声明代理组合、切组、测速、观测、失败/成功 reload、stop/destroy |
+| CFG-04 原生验收与旧入口隔离 | 用规范样本、内部模型一致性及真实行为接替原生配置门禁；评估旧 YAML/parser/oracle/libyaml 的实际引用后移出默认入口与默认门禁 | `.conf` 成为默认配置；无解析失败后隐式回退；剩余旧工具位置、用途与构建依赖明确，完整测试能力不缩水 |
+
+实施顺序为 **CFG-00 → CFG-01 → CFG-02/03 → CFG-04 与 M3 联调**。不重新编号或重新打开已完成的 M2；迁移有自己的验收状态。
+已完成的 DNS wire、hosts/cache、Fake-IP lease、stream bridge、socket policy 等格式无关组件可在此期间继续回归和收口；
+新的配置耦合工作等待 CFG-01 的模型冻结，M3 对外完成须通过 CFG-03/04。
+
+迁移保留边界：
+
+- 复用 C SDK、owner/scope、协议、TUN 数据面、观测与配置发布；不为更换文本格式重写这些模块。
+- 停止新增 mihomo 默认值/隐式回退/字段别名/配置加载器逐项对齐任务；Surge 也不成为新的行为复制目标。
+- 已有 YAML 代码和差分测试在原生入口替代前保留，避免留下不能构建的中间态；本轮不新增长期双格式兼容层或自动转换器。
+- CFG-04 逐项转移仍有价值的诊断、资源上限、引用、取消、热更新与协议用例，再移除仅为旧格式服务的默认测试/依赖。
+  历史 176 个差分样本保留原验收含义，不把它们改写为 `.conf` 已通过。
+- 旧格式导入、配置转换或第三方 API 兼容只有在明确需求下作为独立外围工具排期，不进入内核的完成条件。
+
+### 2.2 独立行为契约与验收来源
+
+保留已有安全与生命周期契约。首个原生版本继续采用已验证的规则顺序、association 身份、首次选路固定与旧流保活，
+理由是内部一致性及回归保护；如需改变选路粒度或映射模式，先提出单独设计和行为测试，不因配置格式变化暗中改变数据面。
+
+默认值建立 Solaris 自有表：每项记录作用层、单位、零值/缺省、上限、平台前提和验证用例。
+DNS 不内置隐式公网回退；stale cache、上游选择、地址族偏好及 UDP timeout 的默认值按应用需求与测试确定。
+既有实现中的 4096、100 ms、300 s 等数值可以作为候选，不因来源于 mihomo 就强制保留或无理由修改。
+
+验收依据按职责分为：Solaris 原生配置与生命周期规范、协议标准/线格式、独立对端互通、对应平台实际行为。
+第三方实现可作为辅助对照；差异需要按本项目契约解释，不能仅凭“和 mihomo/Surge 不同”判定缺陷，也不为其历史行为新增特殊分支。
 
 ## 3. M0：新工程与 SDK 骨架
 
@@ -247,6 +299,8 @@ fuzz RSS 是 fuzz 进程的观测值，不是内核生产内存或吞吐结论�
 以上是本次提交前的本机验证记录，不包含远端 CI 或其他 OS 本机验证。M1 已记录的 Xray UDP 长重复对端/环境限制保持独立，不由 TLS 补丁通过记录推导为已修复。
 
 ## 5. M2：基础配置和宿主业务闭环
+
+本节保留原 YAML 目标下的交付与验收记录；2026-11-13 后的原生 `.conf` 迁移以 2.1 为准，不延续全量 mihomo 对齐目标。
 
 计划基线：`6a16f60`，2026-11-06。下列任务定义全阶段范围与验收条件；分批实现记录见 5.8–5.10，M2 已完成实现与本机功能验收，最终状态和已知问题见 [5.11](#511-完整配置差分与-m2-07-验收矩阵)。
 M2 的交付目标是：**仅使用安装后的 C SDK，从一份基础 mihomo YAML 建立真实代理服务，完成选择、测速、观测、关闭与安全更新。**
@@ -587,24 +641,345 @@ M2-01–M2-07 已完成，阶段按上述已声明范围和本机功能验收结
 
 ## 6. M3：DNS 与双栈 VPN
 
+原计划实现基线：`e2e8855`；2026-11-13 按独立内核方向修订。已有工作区组件继续复用，本节不表示 M3 整体已完成或已通过设备验收。
+M3 的交付目标是：仅使用安装后的 C SDK 与薄平台绑定，以 Solaris Conf 或统一类型模型配置 DNS、hosts、TUN 和可选 sniff，
+完成受宿主网络策略约束的 DNS、Fake-IP 和双栈 TUN 转发，并在 Android/Apple 宿主中验证启停、更新和网络变化。
+格式迁移依赖 CFG-01–04；mihomo 对照工具仅保留已有研究/回归用途。M2 的非阻塞短包已知问题独立跟踪，不混作新 DNS/TUN 缺陷。
+
+### 6.1 范围、现有基础与缺口
+
+| 范围 | M3 交付 | 本阶段边界 |
+| --- | --- | --- |
+| DNS | 有界 wire codec、UDP/TCP 上游及本地服务、hosts、正/负缓存、policy、独立代理服务器/bootstrap/direct 解析 | 递归权威解析器、DNSSEC 验签、自动 ECS、DNS64 不附带实现；不能以 DoH 加密宣称 DNSSEC |
+| 加密 DNS | DoT、DoH HTTP/2，显式允许的 HTTP/1.1 兼容；fallback 和宿主系统 DNS 更新 | DoQ/HTTP3 继续 M6；不自动降级为明文或任意公网 DNS |
+| Fake-IP | 双栈地址池、排除、租约、DNS TTL 保留、TCP/UDP 恢复、歧义隔离、完整停止检查点 | M3 提供状态导入/导出与宿主示例；自动 profile 磁盘管理和崩溃恢复策略继续 M4 |
+| TUN | 复用已有 IP codec、lwIP/system、FD/packet/device backend，接入异步路由、跨 owner bridge、DNS 劫持与观测 | lwIP 仍为单个 stack owner；不增加 gVisor/mixed 栈，不宣称输入分片重组、完整 ICMP/PMTU 或线性多核加速 |
+| Sniff | 有界 HTTP/1 Host、TLS ClientHello SNI；Fake-IP 恢复与 sniff 结果分开 | QUIC/ECH 内层域名、任意应用协议识别及 UDP QUIC sniff 延后；不能通过解密猜测域名 |
+| SDK/平台 | typed DNS/platform/tunnel API，Android FD/protect/JNI/AAR，Apple packet flow/module map/Swift/XCFramework，最小 VPN 宿主 | 权限、路由、系统 DNS、签名和 UI 属于宿主；Windows/Linux/OpenHarmony 完整 VPN 集成继续 M5 |
+| 验收 | 原生配置/类型模型一致性、公开安装宿主、故障/取消/重载、两 owner、设备与产物分层记录 | 本地 raw packet/模拟器/签名或链接不能替代实际 VPN 路由与真机结果 |
+
+以下按原计划基线识别可复用内容与接线缺口；工作区已新增的组件需在 CFG-00 单独收口，不把该基线表视为最新构建/运行结果：
+
+| 可复用入口 | 已有能力 | M3 必补缺口 |
+| --- | --- | --- |
+| [system resolver](../../src/dns/system/resolver.c)、[契约](../../src/dns/system/resolver.h) | 异步 `uv_getaddrinfo`、最多 16 个地址、取消后保留 OS work 到真实结束 | 没有 DNS wire、RCODE、TTL、policy/cache；不能用于要求所有解析流量都受 protect 的 TUN 严格模式 |
+| [route job](../../src/policy/route/job.c)、[UDP association](../../src/flow/udp/association.c) | resolver 注入、一次惰性解析、固定 plan、首包 ROUTING admission | 增加解析用途/代际/terminal invalidation；不能把网络失效当普通 DNS 失败后继续选路 |
+| [physical TCP](../../src/transport/socket/tcp.c)、[socket policy](../../src/transport/socket/socket.h) | connect/send 前的内部同步 preparation | TCP 域名仍直调 system resolver；公开 protect、网络快照、代理服务器解析必须接入所有拨号路径 |
+| [TUN inbound](../../src/adapters/inbound/tun/inbound.c)、[stack](../../src/stack/tun/lwip/stack.c) | IP/双栈/UDP、两种 TCP 栈和关闭屏障 | 当前同步 select、单 owner；尚无 M2 routed admission、跨 owner bridge、Fake-IP、sniff 或 DNS 劫持 |
+| [UDP reply 契约](../../src/contracts/flow/udp.h)、[TCP relay](../../src/flow/tcp/relay.c) | 线程安全 reply 引用要求、owner 内有序 relay | TUN reply 当前使用 owner-only scope，不能直接把 worker_count 改为 N；relay 不允许跨 owner 使用真实 stream |
+| [配置编译器](../../src/config/image/compile.c)、[manager](../../src/runtime/config/manager.c) | 离线编译、候选准备、全局发布、旧 lease 延后退休 | 目前拒绝 `dns/hosts/tun/sniffer`；新增 typed image、DNS bundle、稳定 attachment 与平台变更计划 |
+| [公开 engine](../../include/solaris/engine.h)、[设备层](../../src/platform/tun/device.c) | operation/flush/destroy、内部 FD dup/packet/native/Wintun | host 只有 on_event；无公开 tunnel/protect/network-change、JNI/Swift 绑定或移动产物脚本 |
+
+### 6.2 先冻结的共享契约
+
+新的 M3 接线先复核并冻结以下共享契约；已有组件按同一契约收口，不重复实现。下列类型名描述职责，不作为当前完整 API 导出清单。
+
+1. **代际分开。** runtime generation 管线程和启停；config/selection revision 管规则与节点；resolver revision 管 DNS 语义；
+   network revision 管物理网络/DNS 能力；attachment generation 管 TUN 设备与 packet 队列；Fake-IP pool epoch 管地址预约。
+   每个异步请求记录所需标识，配置 reload 不隐式重建设备或清空 pool。
+2. **唯一服务 owner。** 每个 engine 的 DNS cache/inflight 和 Fake-IP 分配器由一个 service owner 管理，首版使用 worker 0；
+   其他 worker 通过有界消息取得 owned 结果/租约。每个 transport/session 仍只由其 owner 操作，不给每 worker 复制一套全局地址池。
+   跨 owner 请求先预留返回/取消/释放节点，并保留双方 scope；必要完成不能依赖 stop 后会拒绝的普通任务队列。
+3. **解析用途显式。** 区分用户查询、路由目的、Direct 目的、代理服务器和 DNS bootstrap；API 保留 wire 结果与地址结果两层。
+   `original target`、Fake-IP/domain、sniffed host、route-resolved IP、dial target、reply target 分开保存并注明来源。
+   不把任意 metadata.domain 覆写后继续声称原目标未变。
+4. **admission 只捕获一次。** TUN TCP 在合法新连接进入受控 flow admission 时固定视图，UDP 在首条有效包登记关联时固定；
+   DNS/sniff 完成时不重取最新配置。TCP 栈须明确首 SYN 建槽与 accept 之间的视图交接，避免握手跨 commit 换代。
+5. **取消与网络失效。** 接纳后恰好一次 deferred 完成；同 owner 命中 cache 也不 inline 回调。单 waiter 取消不误取消其他合并请求。
+   普通 NXDOMAIN/解析失败遵循既有路由规则；caller cancel、stop、失效 network revision 必须终结父 route/open，不能当无结果继续拨号。
+   旧配置查询可按旧 view 完成；旧网络回复只清理，不写入新网络 cache，也不能触发迟到 open。
+6. **预算是 engine 总量。** cache、租约、inflight、waiter、sniff prefix、packet/bridge 队列均纳入现有总预算；
+   数量上限不随 worker 数倍增。数据拥塞不能吃掉 close、ACK、release 的预留容量。
+7. **宿主接口分组。** `include/solaris/` 按 DNS/platform/tunnel 组织 typed options、opaque handles、owned snapshots；
+   不公开 executor/libuv/lwIP，也不把 engine host 扩成覆盖所有功能的巨型回调表。统一复用现有 operation/flush/destroy 规则。
+8. **配置 image 与平台资源分离。** compile 不联网、不绑定设备、不写租约文件；prepare 输出具体平台变更计划。
+   TUN attachment 独立于配置 bundle，禁止每次 prepare 都创建第二个 lwIP 实例。
+9. **观测用途分开。** 用户 DNS 请求的逻辑流量只计一次；内部 DNS exchange/刷新/重试使用专门统计，不混入 USER/PROBE。
+   物理 socket payload 仍在最底层汇总；输出 cache 命中、各阶段延迟、上游错误、lease 使用和 bridge 丢弃原因，日志不记录原始凭据或整包内容。
+
+M3-00 的确定性交付还包括：字段/默认值表、状态机、引用归属、错误分类、模块裁剪图、平台最低 OS/SDK 及 ABI/slice 清单。
+平台下限已于 2026-11-07 确认：Android API 26、iOS 15、macOS 26；后续构建和绑定按此执行。产物/设备能力仍须分别验收。
+
+### 6.3 原生配置与能力接入
+
+以 CFG-01 冻结的原生字段表为准，`.conf → AST → 统一类型模型 → 能力/引用校验 → prepare/commit`。
+文件编译与内部类型模型构造执行相同语义校验；未来若开放宿主直接构建入口，继续复用该校验，不引入两套默认值。
+未知段/键、重复名称、无效引用、未实现功能及当前平台缺失能力均给出确定诊断，禁止静默改为 DIRECT 或其他 backend。
+
+| 原生能力 | 接入要求 |
+| --- | --- |
+| Hosts | 统一配置项与显式系统快照，明确优先级、地址列表、别名环和地址族；外部别名交给指定 resolver，不隐式读取系统文件 |
+| DNS 角色 | 路由目的、Direct 目的、代理服务器、bootstrap、客户端 DNS 查询分别绑定 resolver；共享缓存仍按角色/代际隔离 |
+| 上游定义 | UDP/TCP/DoT/DoH 与 system 来源显式声明；地址、身份、信任和 bootstrap 分开，不用 URI fragment 猜测出口或接口 |
+| DNS 策略 | 首版以明确的域名/后缀匹配和有序上游失败转移完成闭环；并发竞速、复杂过滤、Geo/规则资源按实际需求进入 M4，不复制隐式 fallback 算法 |
+| Cache | 有界正/负缓存、TTL、coalescing 为基础；stale 使用是显式策略，后台刷新属于服务 scope；不自动携带旧上游的每跳 OPT 状态 |
+| DNS listener | UDP/TCP 的创建、成对绑定、实际 endpoint 查询与失败回滚经公开事务接入；缺省关闭，不从启动 DNS resolver 推导为对外服务 |
+| Fake-IP | 双栈 pool、排除、每 mapping lease、回复恢复和 checkpoint；未知 synthetic 地址 fail-closed，存活预约不随 reload 被重分配 |
+| TUN | 明确 `lwip/system` 实际 backend、MTU、地址族、UDP timeout 与 DNS 劫持；宿主准备/覆盖结果可查询，不接受不存在的 backend 别名 |
+| Sniff | 首版只声明有界 HTTP/TLS 识别；域名来源与 override 规则明确，不要求复现第三方全部 force/skip 设置 |
+| 宿主网络 | 系统 DNS/hosts 与 protect 来自显式网络快照；普通代理可按指定模式使用 OS lookup，严格 VPN 路径禁止未保护的隐式 OS/public DNS 回退 |
+| 状态存储 | M3 提供停止后 owned checkpoint 与宿主协议；自动文件管理继续 M4，原生配置不引入未实现的 profile 设置 |
+
+字段值类型由 schema 决定；布尔仅接受定义的 true/false，数值采用十进制，时间/容量单位显式列出。
+配置中的空值、缺省与显式零分别定义，不继承 YAML 的隐式标量类型或八进制行为。
+资源上限继续覆盖 DNS 报文、压缩指针、RR/CNAME、inflight/waiter、cache/lease 和 sniff prefix，纳入 engine 总预算。
+已有内部限额与实现作为 CFG-00/01 的输入，冻结后用边界样本、失败注入与实际行为证明，不为兼容默认值单独扩大资源使用。
+
+### 6.4 DNS 服务、缓存与加密上游
+
+**DNS wire 与传输。** 实现 query/response、header flags、压缩域名、A/AAAA/CNAME/SOA/PTR 与 EDNS 的有界解析；
+普通非地址记录经校验后可透明转发，不能伪造已实现其应用语义。明确多 question、更新、zone transfer 和畸形 EDNS 的拒绝行为。
+UDP 校验真实来源、ID、question 和长度，处理重复/迟到回复；无 EDNS 按 512 字节、EDNS 按客户端上限且受服务上限约束，截断设置 TC；
+上游请求采用受控 EDNS 大小，首版以 1232 字节建立样本。TC 转 TCP 使用同一总 deadline。未知 RR 的含压缩指针 RDATA 不猜测重定位；
+无法安全重编码时保留校验后的原 wire，或明确不缓存/不改写，不能输出损坏消息。
+TCP/DoT 长度前缀、拆粘包、流水请求与乱序结果各有正确性测试，不把一条连接上的取消变成取消全部请求。
+报文和 TCP 行为分别依据 [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035.html) 与 [RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html)。
+
+**cache 与合并。** key 至少包含 resolver/network revision、解析角色、policy/upstream、经策略组时的 selection revision、
+规范化 QNAME/QTYPE/QCLASS 和影响答案的 DO/CD/ECS 语义；不支持的 ECS 配置拒绝。保留原始问题用于回复。
+正缓存按 RR/CNAME 链的有效 TTL 使用；负缓存区分 NXDOMAIN 与 NODATA，并核对 SOA，传输超时不冒充负答案。
+cache hit 重写请求 ID 并递减 TTL，TTL 0 不缓存；OPT 按 hop 处理，不作为普通缓存 RR。显式允许 stale 时采用已声明的短 TTL 与后台刷新，
+但刷新必须由 DNS 服务 scope 持有、受同一预算/网络代际/关闭屏障管理，禁止 detached 任务；不把内部缺少 TTL 的 OS 地址结果伪造为 wire cache。负缓存依据 [RFC 2308](https://www.rfc-editor.org/rfc/rfc2308.html)。
+只合并语义与代际一致的请求，分别处理 waiter deadline/cancel；最后 waiter 结束才取消可取消的 transport；独立 service-owned refresh 有自己的引用与取消条件。
+
+**策略与依赖环。** 图节点区分 query role、上游、DNS egress node、代理服务器和 bootstrap。编译检查静态环；
+运行时 carry visited/depth 和原始总 deadline，防止通过切组、CNAME 或网络更新绕过检查。
+普通目的解析、代理节点域名与 DNS 上游 hostname 不能共享一个会递归调用自身的默认 resolver。
+首版采用有界的有序传输失败转移，成功 DNS 响应与网络失败分别处理；NXDOMAIN、NODATA 和服务端错误如何处理由原生策略明确。
+并发竞速及回答过滤扩展须单独定义选择规则和原始总 deadline，不复制隐式主/备优先级。
+DNS 内部 A/AAAA 地址 lookup 与 MX/TXT 等 wire exchange 的选择规则分别测试，不能对无地址记录误触发污染判断。
+解析、TCP 各候选尝试、UDP 新 family lane、测速及 session 新 carrier 都走统一 platform policy，覆盖 M2 所有出站。
+
+**DoT/DoH。** 复用 BoringSSL trust/identity 校验，补中立 TLS ALPN 配置及协商结果，不修改现有协议 TLS 默认行为。
+DoT 使用受控 stream + DNS TCP framing；DoH 首版包含 HTTP/2，默认 POST `application/dns-message`，GET 为显式选项。
+连接池 key 包含上游 endpoint、TLS identity、trust identity、DNS egress plan/selection、resolver/network revision；
+CA、出口或网络改变后，新请求不得复用身份不匹配的旧连接，旧连接只为仍有效的旧请求排空。
+HTTP/1.1 仅在显式允许的兼容策略下使用；不跟随任意重定向、不接受 unsolicited server push，不自动更换上游或降为明文。
+DoH 发往上游的 DNS ID 为 0，回交原请求时恢复 ID；POST/GET 的选择由 Solaris 原生配置与协议契约决定。
+DoH 严格校验状态、media type、响应上限、HTTP Age 与 DNS TTL 的有效期关系；GOAWAY/RST_STREAM/连接关闭按每请求完成，重试受原 deadline 限制。
+依据 [RFC 7858](https://www.rfc-editor.org/rfc/rfc7858.html) 和 [RFC 8484](https://www.rfc-editor.org/rfc/rfc8484.html)。
+
+HTTP/2 codec 选用 nghttp2 的无 I/O 嵌入接口，经 Solaris stream/TLS 读写；其 session 固定一个 owner，不能另建绕过 protect 的网络栈。
+在 M3-00 锁定正式版本、源码 SHA、许可证、私有符号和 allocator/budget 接线；关闭加密 DNS 时可裁剪相应依赖。
+HTTP/1.1 复用私有 llhttp 并补独立响应 body 契约，不把现有 HEAD 测速器直接当 DoH client。
+此选择依据 [nghttp2 嵌入模型](https://nghttp2.org/documentation/programmers-guide.html)。
+
+### 6.5 Fake-IP、DNAT 与重启边界
+
+pool 服务属于 engine 级 DNS/Fake-IP 状态，和普通 DNS cache 分离。TCP flow 与 UDP **每个目的 mapping** 持 owned lease，
+不是只钉住 association 首个地址。名称规范化、A/AAAA 关系、排除名单和地址池冲突在编译/prepare 时检查。
+地址复用必须同时满足：没有活动引用、最后一次可能对客户端可见的 DNS TTL 已结束、quarantine 已结束。
+cache hit、重复 DNS 回答也更新可见有效期；配置更新不能立即删除旧租约或把旧 fakeIP 改绑到新域名。
+
+保留原始 fakeIP/域名、实际 endpoint、family/port、回复恢复上下文。两个原目标映射到同一个真实 IP:port 时，
+在**发送前**选择可区分的隔离 lane/子通道；资源不足明确失败。不能用最后一次映射覆盖回包归属，也不能向 association key 加 destination 偷换固定选路。
+普通非 DNAT 回复仍保留实际 peer；仅对有明确转换关系的端点恢复 fakeIP，备用来源地址/端口策略另行校验。
+Direct、native SS、UoT、XUDP 分别证明歧义隔离；协议无法唯一恢复时报告限制，不谎称所有封装都具有相同 NAT 模式。
+
+| 更新/重启场景 | 必须行为 |
+| --- | --- |
+| 兼容规则/DNS reload | 新查询/新 admission 用新 view；旧 flow/mapping 的 lease 与 pool 预约继续有效 |
+| 同 engine stop/start | stop 排空 I/O；名称映射、DNS 有效期和 quarantine 留到 engine 生命周期结束，不从池头重新分配 |
+| pool/filter 变更 | 保留仍被使用的旧预约；无法同时满足新旧数值范围时报告需迁移/重建，不能直接复用冲突地址 |
+| 完整停止后恢复 | 只接受停止 admission、排空可见 DNS 回复和 flow lease 后生成且与宿主 clean manifest 绑定的 sealed checkpoint |
+| 崩溃、dirty/缺失/损坏 checkpoint | 不保证恢复原池；拒绝重新分配原数值池，要求恢复可信完整状态或采用不重叠的新数值池 |
+| 客户端超 TTL 私自长期缓存 | 不承诺无限期避免旧地址别名；有限 quarantine、清理系统 cache 都不能证明所有应用私有 cache 已失效 |
+
+内部 namespace/epoch 改名并不改变客户端持有的数值 IP，不能当作冷重启隔离办法。
+M3 提供 stopped/sealed 状态的 bounded owned export/import：版本、数值 pool、pool epoch、seal ID、名称↔地址、分配状态、TTL 剩余保留期、quarantine 和 tombstone。
+宿主持久化 pool 使用记录属于恢复前提，clean manifest 必须绑定同一个 pool epoch/seal ID，并由宿主核对最新已提交 seal 水位；
+快照内部校验和不能证明它是最新状态，新 engine 也不能自行推断该数值池从未使用。
+导入只允许尚未使用且 stopped 的空 engine，整体校验后原子安装；禁止覆盖已有预约、回滚旧 seal 或接受 clean 标记不匹配的快照，失败不修改状态。
+历史未知时不得自称 fresh pool，必须使用宿主确认不重叠的数值范围；无法满足时拒绝激活 Fake-IP。
+不跨进程序列化单调时钟。首版可保守地重新计时剩余保留期，不因墙钟变化提前复用。
+宿主在运行前持久化 dirty 标记，正常停止后原子保存 checkpoint 再标 clean；运行中普通 snapshot 不能冒充崩溃恢复点。
+核心不自动写 profile 文件；M4 再加入存储后端、自动调度和崩溃恢复策略。
+
+### 6.6 TUN 异步数据面与多 owner
+
+**稳定 attachment。** attachment 持设备、栈、packet 队列、generation 和关闭屏障；每个新 flow/association 持 M2 config/control lease。
+仅规则、节点或兼容 DNS 变化复用 attachment；backend/MTU/地址/peer/framing 等结构变化生成显式重建计划。
+lwIP 的进程单实例约束不允许新旧栈并存，重建必须报告中断；system 的地址/peer/回注路由和 `includeAllNetworks` 限制继续执行。
+
+**TCP。** stack owner 独占真实栈 stream，flow owner 驱动 Fake-IP、sniff、route job 和 outbound；中间使用通用有界 stream bridge。
+桥两侧分别持 owner-only scope，共享 envelope 使用线程安全引用；DATA/EOF/shutdown 有序，写入接纳/拒绝和原 owner 恰好一次完成遵循现有 stream 契约。
+开启 reading 前预留至少一个最大 chunk 的 credit，暂停/恢复和 writable 不丢通知，不能先超预算再暂停。
+首轮先在同 owner 验证异步 route，再在 stack owner≠flow owner 条件下验证，不直接跨线程调用真实 stream 或 relay。
+
+**UDP。** association key 保持 engine/attachment namespace + client source，先固定 flow owner，再执行 routed/tracker admission。
+首个有效包进入 NEW/ROUTING 后后续包合并有界队列；A/B/A、反向首包和多目标沿用同一 plan。
+入口与回复各有有界消息桥；回复 retained payload/lease 回 stack owner 编码/emit，send completion 和统计也回正确 owner。
+reply retain/release 不再直接跨线程操作 TUN scope；两 owner 同时 stop 时仍等待 accepted packet、reply 与释放 ACK。
+
+**DNS 劫持。** 只截获配置明确指定的 UDP/TCP DNS 目标，进入 engine DNS 服务；TCP 53 同样支持 framing、取消和关闭。
+DNS 服务自身的 upstream socket 标明内部用途，不能再次被 TUN 劫持形成环。Fake-IP 未知/过期地址不能成为可直接发送到公网的目标；合成答案不得继承真实上游的 AD/签名有效声明。
+
+**sniff。** Fake-IP/显式域名、sniff 域名和原始数字目标分别保留；先按排除/force/override 规则确定是否采用 sniff，再固定 route。
+HTTP Host/TLS SNI 支持分段、记录跨包、截断和预算失败；读到的 prefix 必须原样有序交给出站，不能丢失或重复发送。
+没有可用域名、超时或加密不可见时按声明策略使用原目标/已有 lease，不无限等待；关联已固定 plan 后不因后包 sniff 重选出站。
+
+保持现有输入分片拒绝、IPv6 checksum、UDP 空包、回复 MTU 分片与部分输出失败不重放等规则。
+公开单包与批量输入使用同一内部接纳路径；批量返回准确 accepted 前缀，不把已接纳的输入在重试时再交一次。
+
+### 6.7 公开平台 API、宿主提交与失败补偿
+
+公开 FD attach 在 API 接纳返回前验证并 dup，宿主持有原 FD；nonblocking 由宿主事先设置，因为 dup 共享文件状态标志。
+packet 输入在接纳前复制/保留，输出借用期限明确；平台 wrapper 如需排队必须持 owned packet。
+attachment 的停止屏障覆盖 SDK bridge 已接纳的数据/完成，宿主自行创建的任意任务仍由宿主停止或按 generation 丢弃。
+
+protect/bind 使用独立请求 token 和 socket lease，给出同步完成适配与异步 accepted/cancel/ACK 的统一规则。
+宿主异步队列不能只保存裸 FD 数字；core 必须保持对应对象/受控副本直到宿主完成或取消 ACK，防止 fd 重用后保护错对象。
+逻辑 deadline 可结束新拨号的等待，但真实宿主操作未结束前不能释放其引用；stop/destroy 必须等这部分完成，宿主也必须保证 accepted 请求最终回复。
+protect/接口绑定失败后禁止 connect/首次 send，不自动绕过策略。
+
+prepare 的 owned 平台计划分为 `CORE_ONLY`、`HOST_NETWORK_UPDATE`、`DEVICE_REBUILD`、`UNSUPPORTED`，
+包含配置值、覆盖值、生效值及设备/地址/路由/DNS 需求。宿主 HOST_READY token 绑定 candidate、base revision、runtime/attachment generation、network revision。
+涉及宿主设置的候选分为 `PLAN_READY → HOST_READY → CORE_READY → COMMITTED`。PLAN_READY 只完成离线/可提前准备部分；
+HOST_READY 后在 admission 关闭状态完成依赖实际接口的 attachment/stack/listener 创建，收齐 owner ACK 才进入 CORE_READY。
+system backend 必须经过这一步；也可由绑定同一 candidate/generation 的独立 attach 完成，不能用半准备候选冒充 M2 的 READY。
+CORE_ONLY 沿用 M2 的 prepare→READY→commit；core commit 仍检查 stale/cancel 并返回实际 revision。
+宿主调用平台 API 不在发布锁或 I/O owner 上阻塞。宿主网络变更按 engine 串行执行，补偿受 transaction token 和最新 network/attachment revision 保护；
+只允许回滚仍由该事务拥有的设置。新事务或 stop 已接管状态时，旧事务只能释放自身资源，禁止恢复旧 VPN 或覆盖新配置。
+
+| 边界 | 更新/失败处理 |
+| --- | --- |
+| compile/prepare 失败 | 候选资源先排空；旧 core 与宿主网络不变 |
+| 宿主授权/设备/设置失败 | 放弃候选，按已完成步骤补偿；保留原失败与回滚结果 |
+| HOST_READY 后 core 准备失败/stale/取消/stop | 拒绝迟到 token；仍拥有宿主设置时才恢复旧设置，否则只释放自身资源；候选及 bridge 排空后完成 |
+| core 已发布、宿主开放 packet 失败 | 结果保留 applied revision；仍拥有当前事务时重新 prepare/commit 旧 image 形成补偿的新 revision，或显式 stop；被新事务/stop取代后不得反向覆盖 |
+| backend/MTU/地址重建失败 | lwIP/平台可能已撤销旧设备，重新建立旧配置也是一次有中断的操作；不保证原 FD 或旧 TCP 能恢复 |
+| 回滚也失败 | 关闭 admission、完成可执行清理，向宿主报告需要重新建立 VPN；不能显示 ready/旧服务仍可用 |
+
+普通 CORE_ONLY reload 不暂停存量流。需要宿主变更时先冻结对应新 admission，再暂停/有界丢弃转换期间输入，完成宿主设置和 core commit 后开放；
+系统网络与 core publication 没有跨系统原子性，不把该流程描述为任意配置无损更新。
+
+### 6.8 网络变化、停止与平台产物
+
+网络事件携带 owned snapshot 和单调 revision：可用地址族、底层网络标识、DNS servers、接口与能力；迟到旧事件不得覆盖新状态。
+DNS server 变化可只失效相关 resolver cache；物理绑定失效需取消对应旧网络 pending query/protect/dial，关闭不能继续使用的 lane/session。
+旧 TCP 不承诺自动迁移；UDP 也不得重放未知是否已经发送的数据。仍有效的既有流按明确策略继续，不能因更新系统 DNS 清空 Fake-IP 活动租约。
+
+停止顺序：停止 packet 生产与新 admission → 撤销/排空 SDK 输入队列 → 取消 route/sniff/DNS/protect 与 flow →
+排空 bridge/transport/所有旧代及宿主 ACK → 释放 core FD 副本/attachment → 宿主释放 PFD、packet 队列及回调上下文 → 完成平台 stop。
+service owner 在所有依赖其回包/释放的对象结束后才能关闭；不得让 host 先关闭执行 protect completion 的队列，再让 core 永久等待该队列。
+
+| 平台 | 最小交付与宿主职责 | 验收边界 |
+| --- | --- | --- |
+| Android | `libsolaris.so` + 薄 JNI/AAR；arm64-v8a 真机、x86_64 模拟器；最小 VpnService 负责授权、Builder 网络设置、PFD/protect/底层网络与前台生命周期 | JNI 不跨线程复用 JNIEnv，不重写核心配置/路由；逐个 so 和 AAR/APK 验证 16 KiB 页对齐；模拟器不替代真机 |
+| iOS | XCFramework iphoneos/arm64 与独立 iphonesimulator/arm64+x86_64 slice，module map/Swift/ObjC 薄桥及最小 NEPacketTunnelProvider | 公开 NEPacketTunnelFlow 交付裸 IP；宿主负责 entitlement/签名/授权/网络设置；不使用私有 KVC 获取 FD |
+| macOS | XCFramework macOS/arm64+x86_64；Extension packet flow 与合法 host utun FD 按实际路径分开声明 | universal 构建及双架构消费；native utun、Extension、system/lwIP 的设备证据分别记录 |
+| Windows/Linux/OpenHarmony | 保留当前 backend/契约/编译回归，平台接口不写进协议模块 | 完整系统 VPN、宿主绑定和设备声明继续 M5，不把 M3 的移动验证外推到这些平台 |
+
+Android 的 protect-before-connect 与宿主 VPN 创建流程以 [VpnService 官方指南](https://developer.android.com/develop/connectivity/vpn) 为平台依据。
+Apple 使用公开 [packet flow 读取](https://developer.apple.com/documentation/networkextension/nepackettunnelflow/readpackets%28completionhandler%3A%29) 与
+[写入](https://developer.apple.com/documentation/networkextension/nepackettunnelflow/writepackets%28_%3Awithprotocols%3A%29) API；数据与地址族一一对应，回调队列由 bridge 管理。
+合法宿主已有 FD 仍可使用显式 framing 接口，但不假定 NetworkExtension 一定暴露这样的 FD。
+
+产物构建必须可复现，带固定依赖/许可证/私有符号及完整静态依赖闭包；移动宿主只消费安装包，不引用源码树的头文件或归档。
+Android/Apple 最小宿主只服务内核与生命周期验收，不加入订阅、账户、桌面网络管理器或产品 UI。
+
+### 6.9 工作包、依赖与并行安排
+
+| 任务 | 分步交付 | 主要目录/依赖 | 完成条件 |
+| --- | --- | --- | --- |
+| M3-00 共享基础 | a. 原生模型/默认/能力清单；b. resolver/lease/network/attachment 类型；c. 双向消息与停止契约；d. 平台基线及依赖锁 | root 协调 contracts、公开头、manifest、CMake/lock；先于所有接线 | 所有权、代际、预算、unsupported 和取消语义有可编译契约/失败样本，关键接口不再由各 agent 自行假设 |
+| M3-01 DNS 基础 | a. wire codec/fuzz；b. UDP/TCP transport；c. hosts/cache/coalescing；d. policy/独立 server/bootstrap 解析；e. 本地 DNS 服务 | `src/codec/dns/`、`src/dns/`；依赖 00 与统一 socket policy | 真正 DNS 结果而非 getaddrinfo 假 TTL；普通/严格模式与全部解析角色贯通 |
+| M3-02 加密 DNS 与网络 | a. TLS ALPN/nghttp2 codec；b. DoT/DoH；c. fallback；d. system snapshot/网络失效/依赖环 | DNS/transport/platform 接口；依赖 00/01，网络事件与 06 共用 | 身份验证、错误响应、请求隔离、取消/GOAWAY、无明文退化、无解析回环 |
+| M3-03 Fake-IP/DNAT | a. pool/lease；b. DNS 应答与排除；c. TCP/UDP 元数据与歧义 lane；d. sealed checkpoint | `src/dns/fakeip/`、flow/mapping；依赖 00/01，接线依赖 04 | 活动地址不误复用，所有声明 datagram 封装的回复归属正确，停止/重启边界可复现 |
+| M3-04 TUN 与 sniff | a. 有界 stream/packet bridge；b. stable attachment/异步 admission；c. DNS hijack；d. HTTP/TLS sniff；e. 双 worker/观测 | `src/flow/`、TUN/stack、`src/policy/`；a 可与 DNS/pool 并行 | stack owner≠flow owner 实测；M2 固定 plan、半关闭、背压和最后关闭屏障保持成立 |
+| M3-05 SDK/平台 | a. platform/tunnel/DNS facade；b. Android/Apple 薄桥；c. 可搬迁产物与最小宿主 | `include/solaris/`、`src/api/`、平台/绑定/构建脚本；依赖 00、04，平台运行依赖 01–03/06 | 安装包独立消费；FD/token/packet 生命周期正确；各声明平台有单独设备证据 |
+| M3-06 更新与恢复 | a. host plan/READY/CAS；b. 网络 revision；c. stop/drain；d. 后台/断网/重建补偿 | runtime/config 与平台宿主；依赖 00/04/05，复用 M2 operation/publication | 失败旧状态不伪成功、发布后取消不伪未应用、无旧回调复活新代、资源回收可核对 |
+| M3-07 完整验收 | a. 原生配置与独立对端；b. 安装 raw-packet 宿主；c. 故障矩阵；d. 移动设备/产物记录 | 测试骨架可提前；最终依赖 01–06 | 下列适用验收 ID 完成，兼容/SDK/TUN/运行时文档与代码一致 |
+
+```mermaid
+flowchart TD
+    CFG[CFG-01 原生模型冻结] --> F[M3-00 共享契约与字段基线]
+    F --> D[M3-01 DNS wire与服务]
+    F --> P[M3-03a Fake-IP池与租约]
+    F --> B[M3-04a 跨owner桥]
+    F --> H[M3-05a 平台与SDK契约]
+    D --> E[M3-02 加密DNS与策略]
+    D --> T[M3-04b至d TUN路由与劫持]
+    P --> T
+    B --> T
+    H --> T
+    T --> R[M3-06 更新与恢复]
+    H --> R
+    E --> R
+    R --> V[M3-05b至c 移动宿主与产物]
+    V --> A[M3-07 完整验收]
+    CEND[CFG-03与04 原生宿主及门禁] --> A
+```
+
+| 批次 | Agent A | Agent B | Agent C | root 集成门槛 |
+| --- | --- | --- | --- | --- |
+| 第一批 | 收口 DNS 组件并提供原生 role 需求 | 收口 lease/DNAT/bridge 并明确数据面语义 | 收口 platform/attachment/READY 契约 | 先完成 CFG-00/01；统一代际/预算/接口，不并行修改共享头/manifest |
+| 第二批 | DNS codec、UDP/TCP/cache | pool/lease 与无 I/O mapping | socket token、packet/stream bridge | 独立契约、分配失败与关闭屏障先通过，再接消费者 |
+| 第三批 | policy、DoT/DoH/bootstrap | TUN async route、DNS hijack/sniff、DNAT | SDK facade、host plan、network event | 接线按依赖推进；重点审查 strict TUN 无旁路与跨 owner 回收 |
+| 第四批 | 原生配置/模型一致性、DNS 独立对端 | raw packet/UDP/租约/重载故障矩阵 | Android/Apple 构建、最小宿主与设备 | 完成安装消费及逐项证据，缺设备明确保持待验收 |
+
+`modules/builtin.json`、CMake/依赖锁、公开头/导出、shared contracts、配置发布点和状态文档仍由单一集成负责人协调。
+DNS 测试 worker 不另建一套 operation 表，Fake-IP 不自行重建 TUN，平台 wrapper 不复制 DNS/路由语义。
+
+### 6.10 验收矩阵与退出条件
+
+以下保留 24 个 M3 ID，按原生配置口径修订。部分工作区组件已有局部测试，但尚不能将任一整组或整个 M3 填为完成；CFG 迁移不继承旧 YAML 差分的通过状态。
+实施时注册 `m3` 与 ID 的 CTest 标签，保存原生规范版本/独立预期、构建开关、提交、精确命令、设备/OS 和报告；辅助对照另列。
+
+| ID | 必须证明的行为 |
+| --- | --- |
+| M3-C01 | Solaris Conf 的 DNS/Host/TUN 等段与类型化输入语义一致；缺省/空值/零、单位、名称/引用、能力与宿主覆盖明确；compile 无 I/O |
+| M3-C02 | wire/conf/metadata/lease snapshot 限额、逐点分配失败、输入释放、诊断/日志不泄漏凭据、源位置与副作用防护 |
+| M3-D01 | 压缩循环/越界/多 question/截断/未知 RR/EDNS、A/AAAA/CNAME/SOA、TCP 长度与 fuzz；正确来源/ID/question 校验 |
+| M3-D02 | UDP TC→TCP、拆粘包/流水乱序、重复/迟到回复、连接复用、每请求取消和总 deadline，独立 UDP/TCP 对端 |
+| M3-D03 | 正/负 TTL、NXDOMAIN/NODATA、TTL 0/OPT/stale刷新、角色/策略/代际隔离、coalescing waiter 独立取消与最后 waiter 回收 |
+| M3-D04 | hosts别名与原生DNS规则优先级、有序失败转移和显式扩展策略、proxy-server/direct/bootstrap 分离；静态/动态环；地址family与最终dial一致 |
+| M3-D05 | DoT/DoH H2及显式H1互通、CA/SNI/ALPN失败、存活连接更换CA/出口、状态/media/body/Age、RST/GOAWAY/取消、无隐式明文降级 |
+| M3-D06 | strict TUN 下 DNS、TCP重试、UDP新lane、代理节点及测速全部受protect/网络策略；system快照更新无泄漏或递归劫持 |
+| M3-F01 | IPv4/IPv6 pool稳定、耗尽/排除、DNS有效期、每TCP/UDP mapping pin/quarantine、活动lease不因reload/缓存驱逐回收 |
+| M3-F02 | U07：多域名/多个fakeIP落同真实IP:port，发送前隔离、备用回复来源、端口/地址族恢复与资源不足错误；各封装独立证明 |
+| M3-F03 | pool/filter变更、旧flow及新目标mapping并存、unknown synthetic fail-closed、同engine stop/start不重分配活跃预约 |
+| M3-F04 | clean seal/import/export、dirty/缺失/损坏/重复/超限/旧格式、旧合法checkpoint回滚及clean/seal不匹配拒绝、时钟变化；冷重启不靠改epoch伪隔离 |
+| M3-T01 | 真实TUN TCP/UDP接入M2异步route；首包/握手/DNS跨commit仍用已捕获view；取消无迟到open |
+| M3-T02 | stack owner≠flow owner、双向顺序/半关闭/背压、A/B/A固定owner、满队列/双owner同时stop、双边ACK、旧generation丢弃 |
+| M3-T03 | UDP与TCP DNS劫持、上游防环、IPv4/IPv6/空包/MTU/输入分片拒绝、单包/批量accepted前缀和逻辑/物理计数 |
+| M3-T04 | HTTP/TLS分段sniff、prefix原样转发、超时/上限/排除/override、Fake-IP域名与sniff冲突、已固定UDP不重选 |
+| M3-L01 | 四阶段候选/变更分类、HOST_READY后system资源失败、READY stale/取消、A迟到补偿而B/stop已接管、core成功packet失败、回滚结果与applied revision |
+| M3-L02 | 网络/DNS代际交错、旧reply不得入新cache/触发open、存活DNS连接池换网络、FD protect迟到/复用、连接保留/关闭结果、数据报不重放 |
+| M3-L03 | producer停止、accepted输入/输出/取消/ACK排空、flush覆盖边界、destroy等待所有代际、回调内操作、重复启停及预算归零 |
+| M3-P01 | Android真机授权/拒绝/撤销、真实FD/protect、双栈DNS/TCP/UDP、Wi-Fi↔蜂窝、前后台、服务重建、PFD与JNI引用释放 |
+| M3-P02 | Apple实际Extension packet flow/网络设置、includeAllNetworks/backend能力、睡眠/恢复、旧read回调、签名安装；macOS native路径独立记录 |
+| M3-P03 | 声明平台各至少30次启停、10次网络切换/断网恢复，16条TCP流与16个UDP关联连续10分钟；记录完整性/失败原因/FD与内存趋势，不冒称M6性能基准 |
+| M3-E01 | 仅安装SDK/绑定的宿主从.conf/类型化配置到DNS/Fake-IP/双栈TUN、控制/观测、失败与成功更新、停止/恢复；至少两flow owners |
+| M3-B01 | 共享/静态、TUN与backend/DNS-TLS裁剪、私有符号/许可证、Android ABI与页对齐、Apple slices/搬迁消费、相关sanitizers和新增fuzz |
+
+退出分为三层，但最终 M3 需要合并满足：
+
+- **核心功能就绪**：CFG-03/04 的原生入口、DNS、Fake-IP、bridge/TUN、更新/取消契约与公开 raw-packet 宿主通过；既有协议/生命周期回归保持。
+- **SDK/产物就绪**：Android/Apple 声明 ABI/slice、独立消费、网络与生命周期最小宿主齐备；编译/模拟结果单列。
+- **平台验收完成**：M3-P01/P02/P03 的声明设备实际通过，G-DEVICE 与 G-LIFE/G-WORKER/G-UDP/G-CONFIG/G-RELOAD 的 M3 范围有对应证据。
+
+没有真机时可完成前两层并标记设备待验收，不能把整个 M3 标记为平台完成。
+本次仅完成计划与源码分析，不执行 TUN 创建、系统代理/路由/DNS 修改或设备授权；实际设备阶段按宿主/测试设备逐项确认后执行。
+
+### 6.11 首批可执行工作
+
+先执行 CFG-00：核对当前 CI 与在途源码，把已有组件的实现、验证和未完成接线列清，避免新方向覆盖未收口的修改。
+随后交付 CFG-01/02 的 Solaris Conf v1 规范、lexer/parser、统一类型模型及原生配置测试；CFG-03 迁移 SDK 和安装宿主。
+DNS/Fake-IP/bridge/platform 的格式无关修复可并行；其配置接线必须以 CFG-01 冻结模型为输入。
+按 M3-01–06 完成原生 VPN 闭环后，以 CFG-04 与 M3-07 汇合验收，不继续追加 mihomo/Surge 的字段兼容清单。
+
+## 7. M4：按需策略与资源管理
+
+本阶段是候选能力池；按明确的宿主需求逐项排期，不以第三方配置覆盖率作为退出指标。
+
 | 任务 | 交付物与范围 | 验收 |
 | --- | --- | --- |
-| M3-01 | DNS 报文、UDP/TCP 上游、hosts/cache、policy 与代理服务器独立解析 | 受控 DNS 对端、缓存失效和解析依赖环用例 |
-| M3-02 | DoH/DoT、fallback、系统 DNS/网络变化 | 使用统一网络策略；不阻塞 I/O owner |
-| M3-03 | Fake-IP 分配/租约/排除/持久化边界、UDP DNAT 与歧义隔离 | U07，更新与重启不错误复用活跃映射 |
-| M3-04 | 双栈 TUN packet codec、lwIP/system TCP 与 UDP association 已实现；sniff 未实现 | 本地原始 IP/回环 socket/模拟设备验证；入站分片拒绝，UDP 回复按 MTU 分片；真实 TUN 待 G-DEVICE |
-| M3-05 | Android fd/protect、Apple packet callback 与薄绑定 | 真机或明确标注的对应设备验证，签名/模拟器不冒充真机 |
-| M3-06 | 断网恢复、前后台、重复启停、回调排空和 TUN 资源释放 | 相关 G-LIFE/G-WORKER/G-UDP/G-DEVICE 通过 |
-
-## 7. M4：日常配置覆盖
-
-| 任务 | 交付物与范围 | 验收 |
-| --- | --- | --- |
-| M4-01 | 资源后端与 proxy/rule Provider 调度、下载、解析、过滤、原子发布 | 失败保留已生效内容，无半更新状态 |
-| M4-02 | url-test/fallback/load-balance、嵌套组、健康历史与全局一致选择 | 超时/取消/懒检查/成员刷新用例；多 worker 语义一致 |
-| M4-03 | Geo/RULE-SET、逻辑规则、源地址/进程/UID 条件；格式逐项登记 | 顺序与解析语义保持；缺平台能力明确诊断 |
-| M4-04 | profile 选择/映射持久化、Provider 独立 revision 与应用流程 | 更新不重启整个 TUN；崩溃/错误时保持可恢复状态 |
-| M4-05 | 日常配置语料回归与兼容矩阵更新 | 以样本和组合覆盖说明“日常可用”，列出剩余缺口 |
+| M4-01 | 原生节点/规则资源的获取、解析、过滤与原子更新；文件/HTTP后端按需加入 | 失败保留已生效快照，有界资源、取消和更新事务；外部格式解析放独立适配器 |
+| M4-02 | 有实际使用场景的自动选择、故障切换、负载分配与组嵌套 | 先定义策略、健康状态归属和选择语义，再验证多worker一致性与更新边界 |
+| M4-03 | 原生规则集、逻辑条件及可选Geo/进程/UID信息 | 各数据格式与平台能力独立声明，不自动覆盖mihomo/Surge的全部语法或数据库 |
+| M4-04 | 选择状态、资源版本及Fake-IP状态的持久化策略 | 原子写入、损坏/崩溃恢复、过期与撤销边界；不复制第三方profile字段 |
+| M4-05 | 选定宿主场景的配置与升级回归 | 覆盖实际使用流程，维护原生规范与功能矩阵，记录未排期项 |
 
 ## 8. M5–M6：扩展与性能
 
@@ -613,18 +988,18 @@ M2-01–M2-07 已完成，阶段按上述已声明范围和本机功能验收结
 | M5-01 | M5 | HTTP outbound、Trojan、VMess 等增量模块；每个模块经过 G-MODULE/G-INTEROP |
 | M5-02 | M5 | WS/gRPC/HTTP Upgrade/XHTTP，REALITY/ShadowTLS/Restls/JLS 与额外安全/指纹组合；按 TLS 补丁设计和独立对端逐项验收 |
 | M5-03 | M5 | Windows/Linux/OpenHarmony 宿主接口、绑定与产物；各平台独立构建和设备验收 |
-| M5-04 | M5 | 其他 mihomo 协议需求进入独立模块任务，包括 Snell/SSR/WireGuard/Naive 等需要专门后端的能力；先记录依赖与支持边界 |
+| M5-04 | M5 | 有明确宿主需求的新协议进入独立模块任务，包括 Snell/SSR/WireGuard/Naive 等需要专门后端的能力；先记录依赖与支持边界 |
 | M6-01 | M6 | QUIC backend、Hysteria2/TUIC/DoQ/HTTP3 等按实际需求顺序接入，不能绕过 socket/protect 服务 |
 | M6-02 | M6 | 额外链式代理、更多高级规则与协议组合；不突破公共依赖边界 |
 | M6-03 | M6 | 串行栈瓶颈测量、可隔离/分片栈后端验证及 worker 分配优化 |
 | M6-04 | M6 | 1/2/4 workers、普通/批量 I/O、单流/多流/Mux 性能测量；以数据确定默认值与预算 |
 
-以上是覆盖路线，不是“阶段结束即全量支持所有 mihomo 版本”的声明。未排定或尚无独立互通证据的协议继续保留在兼容矩阵的未支持/未验证项。
+以上按实际需求与测量结果选取增量任务；未排期的协议、平台与策略不构成当前阶段缺口。没有独立互通证据的组合保持未验证。
 
 ## 9. 第一批可执行工作
 
 M1 数据面和 HTTP/SOCKS5/mixed/WebSocket 内部入站已提交。M2 的离线配置、异步选路、运行时 bundle 与 prepare/commit/retire 已接通。
-M2-01–M2-07 已完成；下一阶段进入 M3 的 DNS 与双栈 VPN 工作。5.11 的未归因短包记录及平台运行证据继续独立跟踪。
+M2-01–M2-07 的原交付已完成；下一步按 [原生配置迁移](#21-原生配置迁移与近期优先级) 收口 CI/在途改动、冻结 Conf v1，并迁移 SDK/安装宿主，再推进 [M3接线](#611-首批可执行工作)。5.11 的未归因短包记录继续独立跟踪。
 远端 CI 和已知参考端/环境限制独立跟进。
 
 继续沿用 registry、公共 I/O/scope 契约和受控对端验证；association 与代理协议必须有自身的数据路径和错误路径证据，不批量接回历史框架。

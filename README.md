@@ -1,8 +1,10 @@
 # Solaris Core
 
-Solaris Core 的新开发目标是一个 **兼容 mihomo YAML、可嵌入、可扩展的 C 代理内核库**，宿主集成方式参考 libclash。
+Solaris Core 的目标是一个 **可嵌入、可扩展的独立 C 网络内核库**。原生配置采用 Surge 风格的 **Solaris Conf `.conf`**，配置模型与运行行为由项目自身定义；mihomo 等项目作为技术参考，不承担完整复刻或配置兼容目标。
 
-M1 的实现与本机功能验收已完成：engine 支持多个 I/O worker，内部已实现模块 registry/配置工厂、统一 stream/datagram、资源 scope、UDP association、Direct/Block、中立 TLS、VLESS TCP/XUDP、VLESS encryption/Vision，SS AEAD/2022 TCP/native UDP/UoT v2，以及 AnyTLS v1/v2/session/UoT 路径。内部 select/固定 plan、连接追踪、逻辑/物理流量和 HTTP(S) 单次测速也已接入。SOCKS5 TCP/UDP 扩展试验也已完成；远端 CI 和后续平台/性能验收另行进行，范围及已知限制见 [开发计划](docs/development/DEVELOPMENT_PLAN.md)。HTTP/SOCKS5/mixed 内部入站已实现，支持认证、TCP/UDP 和多监听器，见 [代理入站接入](docs/development/PROXY_INBOUND.md)。公开 SDK 已接通离线 YAML 编译/诊断、异步 prepare/commit、真实监听激活和事务更新；多 worker 运行时 bundle 支持失败回滚与旧 TCP/WebSocket/UDP 保活。公开 SDK 还提供模式/节点选择、节点组和连接快照、连接关闭、USER/PROBE 流量、可取消 HTTP(S) 单次测速与有界日志；安装宿主用法见 [SDK](docs/development/SDK.md)。M2 的实现与本机功能验收已完成：完整参考配置加载器差分覆盖 176 个样本，14 组验收已映射到可执行测试，安装包提供可独立构建的 C 配置宿主。高级 VLESS 短包曾出现一次未归因超时，作为非阻塞已知问题继续跟踪，详见开发计划；DNAT/Fake-IP 继续后续阶段。TUN 内部入站已接通 lwIP/system TCP 栈与 UDP association，提供宿主 packet I/O、POSIX FD、utun/Linux TUN 和 Wintun 设备层；接入顺序与限制见 [TUN 用法](docs/development/TUN.md)，尚无真实系统 VPN/驱动验证。旧框架保留在 Git 历史中供后续按模块复用。
+`.conf` 迁移尚未实现，当前代码仍包含已有 YAML 入口。迁移顺序、旧入口隔离与新的验收口径见 [原生配置计划](docs/development/DEVELOPMENT_PLAN.md#21-原生配置迁移与近期优先级)。
+
+M1 的实现与本机功能验收已完成：engine 支持多个 I/O worker，内部已实现模块 registry/配置工厂、统一 stream/datagram、资源 scope、UDP association、Direct/Block、中立 TLS、VLESS TCP/XUDP、VLESS encryption/Vision，SS AEAD/2022 TCP/native UDP/UoT v2，以及 AnyTLS v1/v2/session/UoT 路径。内部 select/固定 plan、连接追踪、逻辑/物理流量和 HTTP(S) 单次测速也已接入。SOCKS5 TCP/UDP 扩展试验也已完成；远端 CI 和后续平台/性能验收另行进行，范围及已知限制见 [开发计划](docs/development/DEVELOPMENT_PLAN.md)。HTTP/SOCKS5/mixed 内部入站已实现，支持认证、TCP/UDP 和多监听器，见 [代理入站接入](docs/development/PROXY_INBOUND.md)。公开 SDK 已接通离线 YAML 编译/诊断、异步 prepare/commit、真实监听激活和事务更新；多 worker 运行时 bundle 支持失败回滚与旧 TCP/WebSocket/UDP 保活。公开 SDK 还提供模式/节点选择、节点组和连接快照、连接关闭、USER/PROBE 流量、可取消 HTTP(S) 单次测速与有界日志；安装宿主用法见 [SDK](docs/development/SDK.md)。M2 的实现与本机功能验收已完成：原 YAML 阶段的完整加载器差分覆盖 176 个样本，14 组验收已映射到可执行测试，安装包提供可独立构建的 C 配置宿主。高级 VLESS 短包曾出现一次未归因超时，作为非阻塞已知问题继续跟踪，详见开发计划；DNAT/Fake-IP 继续后续阶段。TUN 内部入站已接通 lwIP/system TCP 栈与 UDP association，提供宿主 packet I/O、POSIX FD、utun/Linux TUN 和 Wintun 设备层；接入顺序与限制见 [TUN 用法](docs/development/TUN.md)，尚无真实系统 VPN/驱动验证。旧框架保留在 Git 历史中供后续按模块复用。
 
 ## 构建基础 SDK
 
@@ -30,7 +32,7 @@ TUN 可用 `SOLARIS_ENABLE_TUN=OFF` 整体裁剪，或分别关闭 `SOLARIS_ENAB
 | 文档 | 内容 |
 | --- | --- |
 | [架构与模块契约](docs/development/ARCHITECTURE.md) | 项目边界、Solaris 命名、模块接口、依赖和扩展规则 |
-| [配置与宿主 SDK](docs/development/CONFIGURATION_AND_SDK.md) | mihomo 配置兼容、C API、平台职责和配置更新 |
+| [原生配置与宿主 SDK](docs/development/CONFIGURATION_AND_SDK.md) | Solaris Conf、统一模型、C API、平台职责和配置更新 |
 | [运行时与多核](docs/development/RUNTIME.md) | 多 libuv loop、对象归属、任务池、消息与 TUN 栈边界 |
 | [UDP 与 NAT](docs/development/UDP_NAT.md) | association、目的映射、通道复用、回复恢复与生命周期 |
 | [测试与验收](docs/development/TESTING.md) | 契约、差分、互通、平台与性能证据 |

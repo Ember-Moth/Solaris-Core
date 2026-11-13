@@ -4,7 +4,9 @@
 
 ## 1. 项目定位
 
-Solaris Core 是全新开发的可嵌入 C 代理内核库，公开配置兼容 mihomo YAML，宿主集成能力参考 libclash。交付库、头文件、薄平台绑定、测试宿主与可复现构建。
+Solaris Core 是面向应用嵌入的独立 C 网络内核，交付库、头文件、薄平台绑定、测试宿主与可复现构建。原生配置目标是 Surge 风格的 Solaris Conf `.conf`，其模型与行为由 Solaris 自身规范定义。
+
+mihomo、Surge、sing-box、libclash 等可用于技术学习和独立对照；不承诺复制其配置、默认值、控制 API 或完整功能。原生格式迁移进度见 [开发计划](DEVELOPMENT_PLAN.md#21-原生配置迁移与近期优先级)。
 
 自有运行时、配置编译、路由、DNS 和协议代码使用 C，发布数据面不依赖 Go runtime。已有 BoringSSL 依赖包含 C++；本项目不要求所有第三方依赖重新用纯 C 实现。
 
@@ -14,7 +16,7 @@ Solaris Core 是全新开发的可嵌入 C 代理内核库，公开配置兼容 
 
 | 对象 | 约定 |
 | --- | --- |
-| 自有函数 | `solaris_engine_create`、`solaris_config_compile_yaml` 等 `solaris_*` |
+| 自有函数 | `solaris_engine_create`、`solaris_config_compile_bytes` 等 `solaris_*` |
 | 自有类型 | `solaris_engine_t`、`solaris_stream_t` 等 `solaris_*_t` |
 | 宏、枚举常量和 guard | `SOLARIS_OK`、`SOLARIS_EAGAIN`、`SOLARIS_ENGINE_H` |
 | 公开头文件 | `include/solaris/`，例如 `<solaris/engine.h>` |
@@ -31,7 +33,7 @@ Solaris Core 是全新开发的可嵌入 C 代理内核库，公开配置兼容 
 ```mermaid
 flowchart TD
     Host[宿主与平台薄绑定] --> API[Solaris C SDK]
-    API --> Config[mihomo YAML 编译器]
+    API --> Config[Solaris Conf 编译器与统一配置模型]
     Config --> Registry[静态模块注册与配置工厂]
     Registry --> Snapshot[不可变配置快照]
     API --> Control[模式 / 策略组 / Provider / 观测]
@@ -46,7 +48,8 @@ flowchart TD
     Services --> Platform[Socket / TUN backend / 宿主回调]
 ```
 
-配置只在准备阶段使用 YAML/通用节点视图。转发热路径访问编译后的结构体、索引和句柄，不查询 YAML/JSON 树。
+原生配置解析与语义校验是独立的离线阶段；运行时只消费统一的 owned 类型模型与已准备资源。转发热路径不查询 `.conf`、YAML 或 JSON 文本树。
+可选外部格式适配器位于核心模型之外，不能为第三方隐式行为向 engine/router/flow 增加特殊分支。
 
 依赖规则：
 

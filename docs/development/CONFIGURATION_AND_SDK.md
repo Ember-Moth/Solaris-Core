@@ -1,42 +1,77 @@
-# 配置兼容与宿主 SDK
+# 原生配置与宿主 SDK
 
-状态：当前开发规范；具体 API 声明尚待实现，进度见 [开发计划](DEVELOPMENT_PLAN.md)。
+状态：2026-11-13 更新的目标规范。Solaris Core 采用独立内核定位，原生配置定为 Surge 风格的 `.conf`；
+当前源码仍有 YAML 入口，原生解析器与宿主切换按 [CFG 计划](DEVELOPMENT_PLAN.md#21-原生配置迁移与近期优先级) 实施。
+具体可调用接口见 [当前 SDK](SDK.md)，本页的新设计不表示已可运行。
 
-## 1. 兼容范围
+## 1. 原生配置与范围
 
-公开输入是 mihomo YAML 与相应 provider payload。对照基准固定为 Herta-Network/mihomo `9f121787bb563fe655d2789cbf6dbcc7ae19a0c9`，即本次核对的 libclash 依赖；升级基准必须更新样本和差异记录。
+格式名称为 **Solaris Conf v1**。借鉴 Surge 的 INI-like 分节及逐行声明，字段含义、默认值、策略和错误处理由 Solaris 自身规范决定。
+不承诺完整 Surge 或 mihomo 配置可直接加载，也不复制其控制 API、管理配置、脚本或全部功能。
+Surge 的格式仅作书写方式参考：[Profile Format](https://manual.nssurge.com/profile/format.html)。
 
-不兼容原 Solaris 私有配置格式、旧函数表或旧 ABI；也不要求复制 libclash 的函数名、JSON 返回结构或 HTTP 控制 API。协议互通按独立对端与明确的协议组合验收。
+### 1.1 v1 规范任务
 
-每项兼容能力需要记录字段/默认值、行为、平台条件、测试 ID、支持状态和与基准的偏差。阶段性通过一部分配置不能标成“完整 mihomo 兼容”。
+以下作为 CFG-01 的规范基线，CFG-02 实现后才能声明支持：
 
-| 范围 | 首个目标阶段 | 核对重点 |
+- UTF-8 文本，允许文件开头的 UTF-8 BOM，支持 LF/CRLF；首版不支持隐式续行、多行值或宏展开。
+- 每个段最多声明一次；段名和字段名使用规范中的固定拼写。节点/组名支持 UTF-8，区分大小写；trim 规则与引号保留范围明确。
+- `[General]` 中显式填写 `config-version = 1`；未知版本、未知段/键、重复键/名称和无效引用报错，不静默忽略。
+- `key = value` 在引号外的首个等号处分隔；逗号列表只在引号外切分；参数值中的后续等号按字段内容保留。
+- 双引号包裹值，定义 `\"` 与 `\\` 转义；未知转义、未闭合引号和不完整参数报错。密码/URL/含逗号名称必须无损保留。
+- 支持 `#`、`;`、`//` 注释；行内分隔符必须在引号外且前有空白，不能截断 `https://`、带片段的 URL 或引号内凭据。
+- 字段 schema 决定值类型；布尔值采用 true/false，数值为十进制，时间/容量单位由字段规范声明。缺省、空值和零值分别定义。
+- `[Rule]` 保持文件顺序。规则模式要求唯一、位于最后的 `FINAL`；未匹配动作显式填写，不由第三方默认行为补齐。
+- 规则/参数只接受已经声明的能力；`#!include` 等管理指令显式报不支持，不当普通注释吞掉。远程 include、脚本、MITM 和托管 profile 不属于 v1。
+
+### 1.2 段与实施批次
+
+| 段 | 职责 | 首批范围 |
 | --- | --- | --- |
-| YAML 公共语法与 `proxies` | M2 | 锚点、别名、merge、标量转换、重复 key、名称与引用 |
-| `mode`、基础 `rules`、`proxy-groups.select` | M2 | rule/global/direct、首匹配、UDP 能力过滤、选择固定 |
-| HTTP/SOCKS/mixed 监听配置 | M2 | 多入站、认证、宿主覆盖、实际绑定结果 |
-| `dns`、`hosts`、`tun`、`sniffer` | M3 | 上游策略、Fake-IP、双栈、网络变化、真实 backend 能力 |
-| `proxy-providers`、`rule-providers`、`profile` | M4 | 原子更新、过滤、缓存、选择与 Fake-IP 持久化 |
-| url-test/fallback/load-balance、Geo/RULE-SET | M4 | 健康状态、嵌套策略、语义顺序和文件格式 |
-| 额外协议、传输、指纹及链式能力 | M5/M6 | 每个协议 × 传输 × 安全 × UDP 组合独立验收 |
+| `[General]` | 版本、基本运行配置和默认监听 | CFG：仅保留宿主实际需要且能生效的设置，不把所有开关堆在全局段 |
+| `[Proxy]` | `名称 = 协议, 地址, 端口, 参数...` | CFG：接已有 Direct/Reject/SOCKS5/SS/VLESS/AnyTLS 的已验证组合 |
+| `[Proxy Group]` | 命名策略与成员引用 | CFG：手动 select；自动策略和组嵌套按实际需求进入 M4 |
+| `[Rule]` | 有序匹配与明确最终动作 | CFG：已有基础 matcher 与 FINAL；引用/循环/能力检查统一 |
+| `[Host]` | 静态地址与别名 | M3：定义自身匹配、别名、优先级及系统快照的边界 |
+| `[DNS]` | resolver、上游、缓存和策略 | M3：按角色与真实实现逐项开放，不继承外部隐式服务器/回退 |
+| `[TUN]` | 实际 backend 与宿主接入需求 | M3：明确设备能力、packet/FD、MTU、地址族和变更计划；不自动取得系统权限 |
 
-M1 中模块可使用测试构造的配置视图，不代表完整 YAML 已支持。原代码中的 SS、VLESS、AnyTLS、REALITY、Vision、ECH、XHTTP 等实现也需要在新入口重新接通并验证。
+`[DNS]`、`[TUN]` 等是 Solaris 的原生组织方式，段名不构成对 Surge 同名功能的兼容承诺。
+段内详细字段、端口禁用/临时绑定、时间默认值及名称引用表在 CFG-01 冻结；未实现的段不能提前被解析成成功但无行为的配置。
 
-## 2. 配置流水线
+下面是用于冻结规范的目标样例，**尚不是当前解析器可执行的配置文件**：
 
-`YAML → 带源位置的节点 → 公共字段与默认值归一化 → 模块配置编译 → 引用/能力校验 → 资源准备 → 不可变快照 → 提交`
+```ini
+[General]
+config-version = 1
+http-listen = 127.0.0.1:7890
+socks-listen = 127.0.0.1:7891
 
-输入同时支持字节缓冲和文件路径；字节入口显式指定 base directory，供相对的 provider、证书与 Geo 路径解析。语法/静态语义校验不联网，资源准备与激活通过独立操作表达。
+[Proxy]
+Node = ss, proxy.example.com, 443, encrypt-method=aes-128-gcm, password="example-password", udp-relay=true
 
-必须明确：
+[Proxy Group]
+Exit = select, Node, DIRECT
 
-- 有配置大小、层数、节点数与别名展开上限，诊断包含字段路径与源位置。
-- 未实现且影响转发的协议/字段/组合返回明确错误，不能静默改成 Direct。
-- 模板用扩展节点按参考行为处理，不能简单拒绝全部未知顶层 key；模块报告消费过的字段。
-- `external-controller`、`external-ui`、`secret` 等可解析并报告库模式不执行，不因此创建控制端口。
-- 宿主对工作目录、监听和 TUN 参数的覆盖显式声明，报告请求值、覆盖值和生效值。
-- `tun.stack` 必须对应实际 backend 能力；lwIP 不能冒充 system/gvisor/mixed。选择其他 backend 需要显式覆盖与诊断。
-- 分享链接导入与 App 主订阅管理是独立输入功能，不让各平台分别重写核心 YAML 语义。
+[Rule]
+DOMAIN-SUFFIX,example.com,Exit
+FINAL,DIRECT
+```
+
+## 2. 配置流水线与迁移
+
+`Solaris Conf → lexer/parser 与源位置 AST → schema/名称/引用/能力校验 → owned 类型化配置 → prepare → commit → retire`
+
+C SDK 消费同一个配置模型，配置文件不是运行时的数据结构；后续若提供直接类型化构建入口，必须复用同一语义校验与默认值。
+文件/字节输入保留明确的 source/base-directory，错误包含段、键/条目和行列；错误信息与日志不输出密码、私钥或 token 原文。
+输入字节、行长、token、条目、嵌套引用及诊断数量分别限额；语法和静态检查不联网、不读外部资源、不绑定监听或创建设备。
+
+- 原生编译器直接构建公共模型，不先转换成 mihomo YAML 再调用旧解析器，不把第三方 schema 固化成内部标准。
+- 新默认入口与旧 YAML 入口必须明确区分，不能在 `.conf` 失败后隐式尝试 YAML；CFG-03 冻结 API/调用约定并迁移安装样例。
+- 现有 YAML 实现暂留以维持迁移期间的构建和回归。CFG-04 完成后，按实际引用将其及专属参考工具/依赖移出默认库与默认门禁；不新增长期双格式维护义务。
+- 旧格式导入若有明确需求，作为独立外围适配器输出公共模型；当前迁移不额外交付转换器。
+- 宿主对监听、TUN 和网络能力的覆盖显式声明，结果包含请求、覆盖与生效值；不可用功能返回明确错误，不自动改为 Direct 或其他 backend。
+- 配置格式变化不改变连接所有权、取消屏障或已建立流的路由；改变这些行为须单独设计和回归。
 
 ## 3. 路由、策略和 DNS
 
@@ -50,11 +85,12 @@ DNS 是 TUN 与路由共用服务，覆盖报文解析、UDP/TCP 上游、hosts/
 
 系统 DNS 更新按解析器代际失效相关缓存，不清除仍被关联使用的 Fake-IP 租约。上游 DNS、代理服务器解析与经代理拨号要检测依赖环，并应用宿主网络策略。
 
-Provider 调度、内容编译和资源获取分层。下载候选内容，校验后原子发布，失败保留已生效快照；普通 HTTP(S)/文件后端与宿主特殊 URI 后端均可实现资源接口。rule-provider 的 classical/domain/ipcidr 与 yaml/text/mrs 支持状态分别登记。
+资源调度、内容编译和获取分层。下载候选内容，校验后原子发布，失败保留已生效快照；HTTP(S)/文件及宿主资源接口按实际需求接入。
+原生节点/规则资源有独立格式与版本；第三方资源格式只在明确需要时提供外围适配器，不以其格式清单约束核心模型。
 
 ## 4. 宿主 API 能力
 
-普通 C 函数与 opaque handle 构成公开 SDK，不要求 get-api 版本协商、历史后缀或兼容保留槽。以下为能力分组，不是已存在的导出符号表：
+普通 C 函数与 opaque handle 构成公开 SDK。以下为目标能力分组；已实现的导出和生命周期约定以 [SDK](SDK.md) 为准：
 
 | 分组 | 操作 |
 | --- | --- |
@@ -81,7 +117,7 @@ SDK 不沿用 packed traffic 或进程全局 last-error。错误必须能关联�
 
 输入在 API 返回前复制，或通过独立 owned-handle 接口明确转移所有权；借用输出只在约定回调范围有效。成功接纳的异步操作只有一次最终结果，取消不能让迟到回调访问已释放对象。
 
-TUN fd 默认由宿主拥有、库借用。若另设所有权转移接口，须说明成功与失败时谁关闭。protect 完成前不得 connect/首次发送，取消与迟到完成要防止 fd 已关闭复用后被错误保护。
+TUN fd 的原始句柄由宿主拥有；已有 FD 接入由库复制并只关闭副本，具体约定见 [TUN](TUN.md)。若另设所有权转移接口，须说明成功与失败时谁关闭。protect 完成前不得 connect/首次发送，取消与迟到完成要防止 fd 已关闭复用后被错误保护。
 
 packet callback 与控制事件独立管理线程和容量；库回调不假定宿主 UI 线程，也不允许慢 UI 造成无界内存积压。
 
@@ -103,4 +139,4 @@ packet callback 与控制事件独立管理线程和容量；库回调不假定�
 
 证书信任、网络变化、进程查询和资源路径是明确的平台能力；不能假定所有平台共享同一系统证书路径或进程 API。实际平台能力与构建产物分别验证。
 
-参考：[libclash C 入口](https://github.com/Herta-Network/libclash/blob/main/cmd/main.go)、[固定 mihomo 配置模型](https://github.com/Herta-Network/mihomo/blob/9f121787bb563fe655d2789cbf6dbcc7ae19a0c9/config/config.go)。具体调查保存在 [历史总体草案](../archive/2026-11-03/MIHOMO_LIBRARY_DESIGN.md)。
+早期 mihomo/libclash 调查保存在 [历史总体草案](../archive/2026-11-03/MIHOMO_LIBRARY_DESIGN.md)，作为技术资料，不定义 Solaris 原生配置或当前完成条件。

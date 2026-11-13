@@ -1,6 +1,7 @@
-# 配置、协议与平台兼容矩阵
+# 能力、协议与平台支持矩阵
 
-日期：2026-11-06。固定参考见 [依赖与参考 lock](../../dependencies/lock.json)。M2 已完成实现与本机功能验收；未归因短包作为非阻塞已知问题继续跟踪。阶段完成不扩大下表的平台和组合验证范围，其他目标阶段不表示已经可用。
+方向更新：2026-11-13。Solaris Core 按独立内核推进，原生配置目标是 Surge 风格 `.conf`；迁移按 [CFG 计划](DEVELOPMENT_PLAN.md#21-原生配置迁移与近期优先级) 实施，尚不能直接加载该新格式。
+下表的已有实现与测试记录主要来自 M2 阶段；旧 YAML 支持范围继续说明当前入口，不再作为后续完整兼容目标。协议/平台能力仍按实际验证声明。
 
 | 能力 | 当前状态 | 任务/验收 |
 | --- | --- | --- |
@@ -20,7 +21,8 @@
 | SS UoT | 内部 `udp-over-tcp: true` 使用共享 UoT v2；YAML 编译另要求显式 `udp-over-tcp-version: 2`，避免将参考实现的默认 v1 误接为 v2；六种 cipher 的内部和 YAML → SDK 路径已互通，无 v1/connect 模式 | M1-06g / M2-01 / G-UDP U06 |
 | AnyTLS/session/UoT | AnyTLS v1/v2 协商、TLS、padding 更新、session 空闲策略与共享 UoT 已接入；本机双 worker/双栈/域名互通；协议无半关闭 | M1-06g/h / G-INTEROP |
 | SOCKS5 outbound 扩展试验 | 已实现 CONNECT/UDP ASSOCIATE、无认证或用户名密码、双栈/domain、控制连接生命周期、select/测速/观测；无 BIND、UDP 分片或 TLS 配置入口 | M1-08 / G-MODULE/G-INTEROP |
-| mihomo YAML：公共语法/proxies/rules/mode/select | 已实现离线 bytes/file 编译、owned image/诊断、平面 select 和基础字段归一化；已通过公开 SDK prepare/commit 激活真实代理业务 | M2-01 / 176 个完整加载器差分样本，范围见下文 |
+| Solaris Conf `.conf` | 规范与迁移已列入计划，原生 parser/默认入口/安装样例尚待切换 | CFG-01–04 / 原生 G-CONFIG |
+| 旧 mihomo YAML 入口：公共语法/proxies/rules/mode/select | 已实现离线 bytes/file 编译、owned image/诊断、平面 select 和基础字段归一化；已通过公开 SDK prepare/commit 激活真实代理业务 | M2-01 / 176 个完整加载器差分样本，范围见下文 |
 | 顺序规则与异步 route job | 内部已实现 10 类规则、rule/global/direct、一次惰性 DNS、UDP 能力过滤、固定 plan、取消/超时/stop；已接入 TCP/UDP 入站，首包固定配置并排空取消中的 DNS | M2-02a–e / M2-05b 已接通 |
 | SOCKS5/HTTP/mixed 内部入站 | TCP、UDP ASSOCIATE、认证、多监听器、WebSocket Upgrade/CONNECT WS/WSS 和回环互通已实现；普通 HTTP 每连接单请求；已有 YAML/公开 SDK 激活与更新入口；[用法与限制](PROXY_INBOUND.md) | M2-04 内部路径已实现 / G-LIFE/G-UDP |
 | 配置与控制 SDK | 离线编译、prepare/commit、模式/节点选择、owned 节点组/连接快照、连接关闭、流量、可取消测速与有界日志已公开；取消、乱序完成与回调屏障已实现 | M2-05a–d 已接通 |
@@ -41,6 +43,8 @@
 当前实现不接受旧项目的原 schema，也不提供 mihomo HTTP 控制器。原协议代码/探针保存在 Git 历史和文档归档中，其通过记录不计为新实现的支持状态。
 
 ## M2 离线编译边界
+
+以下描述已有 YAML 入口及原交付范围；不是 Solaris Conf 的字段表。原生规则见 [配置规范](CONFIGURATION_AND_SDK.md)。
 
 顶层支持 `mode/proxies/proxy-groups/rules/port/socks-port/mixed-port/allow-lan/bind-address/authentication/listeners`。
 支持 anchors、alias、map/sequence merge，显式字段覆盖 merge，merge 序列前项优先；重复 key、循环 alias、非字符串 key 和多文档拒绝。
@@ -68,7 +72,7 @@ controller/UI/secret 字段报告库模式不执行；有 anchor 的模板及 `x
 核对真实构造出的节点/组/监听/规则及有序 matcher；176/176 样本、8/8 外部资源防护通过。
 测试不调用 ApplyConfig，不激活参考监听；macOS 使用禁网络沙箱，其他 OS 记录沙箱不可用并保留输入资源防护。
 报告 `build/config-full-differential.json` 保留输入、双边实际结果、42 个刻意差异样本及理由、原始表示和源码校验信息。
-完整构建与观察桥边界见 [差分说明](../../tests/support/config/reference/full/README.md)。
+完整构建与观察桥边界见 [差分说明](../../tests/support/config/reference/full/README.md)。这些旧格式结果不计为原生 `.conf` 通过，后续作为辅助/历史证据使用。
 
 域名差异属于实际匹配行为：Solaris 按既有 ASCII 契约折叠 host 大小写，规范化规则前/尾点；
 固定参考对大写 SOCKS host、DOMAIN 尾点和 DOMAIN-SUFFIX 前点可能选择不同规则。

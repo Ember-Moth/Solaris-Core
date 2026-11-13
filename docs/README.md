@@ -1,13 +1,16 @@
 # Solaris Core 开发文档
 
-基线日期：2026-11-03，最近更新：2026-11-06。M1 与 M2 的实现及本机功能验收已完成。完整配置差分、14 组 M2 验收的证据和非阻塞已知问题见 [M2 验收矩阵](development/DEVELOPMENT_PLAN.md#511-完整配置差分与-m2-07-验收矩阵)。
+基线日期：2026-11-03，最近更新：2026-11-13。M1 与 M2 的实现及本机功能验收已完成。完整配置差分、14 组 M2 验收的证据和非阻塞已知问题见 [M2 验收矩阵](development/DEVELOPMENT_PLAN.md#511-完整配置差分与-m2-07-验收矩阵)。
+
+当前方向：独立网络内核，原生配置采用 Surge 风格的 Solaris Conf `.conf`，不承担 mihomo/Surge 行为复刻。
+下一步先执行 [CFG 原生配置迁移](development/DEVELOPMENT_PLAN.md#21-原生配置迁移与近期优先级)，再按修订后的 [M3计划](development/DEVELOPMENT_PLAN.md#6-m3dns-与双栈-vpn) 完成 DNS/TUN/移动宿主及 24 组验收。
 
 ## 阅读顺序与职责
 
 | 顺序 | 文档 | 负责定义 |
 | --- | --- | --- |
 | 1 | [架构与模块契约](development/ARCHITECTURE.md) | 项目目标、命名、目录、模块边界与扩展方式 |
-| 2 | [配置与宿主 SDK](development/CONFIGURATION_AND_SDK.md) | 配置语义、宿主 API、平台边界和事务式更新 |
+| 2 | [原生配置与宿主 SDK](development/CONFIGURATION_AND_SDK.md) | Solaris Conf 语法/模型、宿主 API、平台边界和事务式更新 |
 | 3 | [运行时与多核](development/RUNTIME.md) | executor、worker、对象所有权、跨线程通信 |
 | 4 | [UDP 与 NAT](development/UDP_NAT.md) | UDP 关联身份、映射、固定选路和回复路径 |
 | 5 | [测试与验收](development/TESTING.md) | 各类验收条件、参考实现与证据要求 |
@@ -30,7 +33,7 @@ TLS 依赖和协议扩展：[BoringSSL 固定基线、补丁与认证边界](dev
 当前要求：
 
 1. 全新开发；不保留原项目的命名兼容壳、私有配置转换层或 ABI 桥接。
-2. mihomo YAML 是公开配置目标；libclash 作为嵌入功能参考，不复刻其二进制接口。
+2. Solaris Conf `.conf` 是原生配置目标；Surge 仅提供分节书写参考，mihomo/libclash 等仅用于技术学习与独立对照。
 3. 模块化扩展和至少两 worker 的正确性属于早期框架验收。
 4. 源码检查、本地探针、协议互通、真实设备和性能测试是不同级别的证据。
 5. 未确定的实现选型必须在开发计划中安排决策任务；不以“后续再优化”掩盖影响架构的缺口。
