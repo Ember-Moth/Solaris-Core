@@ -321,10 +321,10 @@ static void start(void *context, solaris_status_t status)
     }
     solaris_test_event_signal(&env->ready);
 }
-static void no_op(void *context, solaris_status_t status)
+static void queue_drained(void *context, solaris_status_t status)
 {
-    (void)context;
     CHECK(status == SOLARIS_OK);
+    solaris_test_event_signal(context);
 }
 static void gate(void *context, solaris_status_t status)
 {
@@ -389,14 +389,18 @@ static void run(int mode)
         if (mode == ADMIN || mode == CLOSE_ALL) {
             CHECK(solaris_executor_post(env.owner, gate, &env) == SOLARIS_OK);
             solaris_test_event_wait(&env.entered);
-            CHECK(solaris_executor_post(env.owner, no_op, NULL) == SOLARIS_OK &&
-                  solaris_executor_post(env.owner, no_op, NULL) == SOLARIS_EAGAIN);
+            solaris_test_event_t drained;
+            CHECK(solaris_test_event_init(&drained, 0) == 0);
+            CHECK(solaris_executor_post(env.owner, queue_drained, &drained) == SOLARIS_OK &&
+                  solaris_executor_post(env.owner, queue_drained, &drained) == SOLARIS_EAGAIN);
             if (mode == CLOSE_ALL)
                 CHECK(solaris_tracker_close_all(env.tracker) == SOLARIS_OK);
             else
                 CHECK(solaris_tracker_close_connection(env.tracker, env.id) == SOLARIS_OK &&
                       solaris_tracker_close_connection(env.tracker, env.id) == SOLARIS_OK);
             solaris_test_event_signal(&env.gate);
+            solaris_test_event_wait(&drained);
+            solaris_test_event_destroy(&drained);
         } else
             CHECK(solaris_executor_begin_quiesce(env.owner) == SOLARIS_OK);
         solaris_test_event_wait(&env.cancelled);

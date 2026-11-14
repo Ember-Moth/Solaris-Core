@@ -97,9 +97,12 @@ static void resolved(void *context, solaris_status_t status, const solaris_addre
         if (expired(udp)) status = SOLARIS_ETIMEDOUT;
         if (status == SOLARIS_OK && udp->resolve_kind == RESOLVE_SERVER) {
             udp->candidate_count = udp->candidate = 0u;
-            for (unsigned int pass = 0u; pass < 2u; ++pass) for (size_t i = 0u; i < count && udp->candidate_count < SOLARIS_RESOLVER_MAX_ADDRESSES; ++i) {
-                if (usable_family(udp, &addresses[i]) && addresses[i].family == (pass == 0u ? SOLARIS_ADDRESS_IPV4 : SOLARIS_ADDRESS_IPV6))
-                    udp->candidates[udp->candidate_count++] = addresses[i];
+            for (unsigned int pass = 0; pass < 2; ++pass) {
+                uint32_t family = pass == 0 ? SOLARIS_ADDRESS_IPV4 : SOLARIS_ADDRESS_IPV6;
+                for (size_t i = 0; i < count && udp->candidate_count < SOLARIS_RESOLVER_MAX_ADDRESSES; ++i) {
+                    if (usable_family(udp, &addresses[i]) && addresses[i].family == family)
+                        udp->candidates[udp->candidate_count++] = addresses[i];
+                }
             }
             status = udp->candidate_count == 0u ? SOLARIS_EIO : start_control(udp);
         } else if (status == SOLARIS_OK) {

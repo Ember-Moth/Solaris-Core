@@ -2,6 +2,10 @@
 #include "runtime/executor/uv.h"
 #include <assert.h>
 #include <string.h>
+#ifdef __linux__
+#include <pthread.h>
+#include <signal.h>
+#endif
 
 typedef struct solaris_task {
     solaris_task_fn run;
@@ -352,6 +356,17 @@ static void worker(void *context)
     current_executor = executor;
     int loop_ok = 0, wake_ok = 0, timer_ok = 0;
     int rc = fault(executor, SOLARIS_POINT_EXECUTOR_LOOP_INIT);
+#ifdef __linux__
+    /* libuv's stream write/writev can raise SIGPIPE on a closed peer. Limit
+     * the signal mask to our I/O thread so the host keeps its own disposition. */
+    if (rc == 0) {
+        sigset_t blocked;
+        sigemptyset(&blocked);
+        sigaddset(&blocked, SIGPIPE);
+        int error = pthread_sigmask(SIG_BLOCK, &blocked, NULL);
+        if (error) rc = uv_translate_sys_error(error);
+    }
+#endif
     if (rc == 0) { rc = uv_loop_init(&executor->loop); loop_ok = rc == 0; }
     if (rc == 0) {
         rc = fault(executor, SOLARIS_POINT_EXECUTOR_ASYNC_INIT);

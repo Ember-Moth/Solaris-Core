@@ -2,6 +2,10 @@
 #include <solaris/core.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 #define CHECK(x)                                                                                             \
@@ -144,6 +148,11 @@ static void connection(const solaris_connection_info_t *p)
 #endif
 int main(void)
 {
+#ifdef _WIN32
+    /* Length-prefixed frames must preserve LF and Ctrl-Z on Windows pipes. */
+    CHECK(_setmode(_fileno(stdin), _O_BINARY) != -1);
+    CHECK(_setmode(_fileno(stdout), _O_BINARY) != -1);
+#endif
     solaris_engine_t *engine = NULL;
     solaris_prepared_config_t *handles[16] = {0};
     void *trust = NULL;

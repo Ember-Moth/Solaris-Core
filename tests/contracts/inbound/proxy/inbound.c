@@ -4,6 +4,10 @@
 #include "support/runtime/event.h"
 #include <stdatomic.h>
 #include <stdio.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
@@ -239,6 +243,11 @@ static void create_module(void *context, solaris_status_t status)
 }
 int main(int argc, char **argv)
 {
+#ifdef _WIN32
+    /* Length-prefixed frames must preserve LF and Ctrl-Z on Windows pipes. */
+    CHECK(_setmode(_fileno(stdin), _O_BINARY) != -1);
+    CHECK(_setmode(_fileno(stdout), _O_BINARY) != -1);
+#endif
     fixture_t f = {0};
     atomic_init(&f.fail_after, -1);
     atomic_init(&f.clock_ns, UINT64_C(1000000000));

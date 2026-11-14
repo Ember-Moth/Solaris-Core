@@ -2,6 +2,12 @@
 #include "runtime/engine/internal.h"
 #include "runtime/executor/executor.h"
 #include "contracts/io/buffer.h"
+#ifdef __linux__
+#include <errno.h>
+#include <pthread.h>
+#include <signal.h>
+#include <unistd.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,6 +49,14 @@ static void first_task(void *context, solaris_status_t status)
 {
     worker_case_t *test = context;
     CHECK(status == SOLARIS_OK && solaris_executor_is_owner(test->first));
+#ifdef __linux__
+    sigset_t mask;
+    CHECK(pthread_sigmask(SIG_SETMASK, NULL, &mask) == 0 && sigismember(&mask, SIGPIPE) == 1);
+    int pipe_fds[2];
+    CHECK(pipe(pipe_fds) == 0 && close(pipe_fds[0]) == 0);
+    CHECK(write(pipe_fds[1], "x", 1) == -1 && errno == EPIPE);
+    CHECK(close(pipe_fds[1]) == 0);
+#endif
     test->first_thread = uv_thread_self();
     test->generation = solaris_executor_generation(test->first);
     CHECK(solaris_engine_flush(test->engine, 0u, NULL) == SOLARIS_EDEADLOCK);

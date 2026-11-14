@@ -4,6 +4,10 @@
 #include "support/runtime/event.h"
 #include <stdatomic.h>
 #include <stdio.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
@@ -177,6 +181,11 @@ done:
 }
 int main(void)
 {
+#ifdef _WIN32
+    /* Length-prefixed frames must preserve LF and Ctrl-Z on Windows pipes. */
+    CHECK(_setmode(_fileno(stdin), _O_BINARY) != -1);
+    CHECK(_setmode(_fileno(stdout), _O_BINARY) != -1);
+#endif
     fixture_t test = {0};
     atomic_init(&test.fail_after, -1);
     CHECK(!uv_mutex_init(&test.output) && !solaris_test_event_init(&test.ready, 0));
