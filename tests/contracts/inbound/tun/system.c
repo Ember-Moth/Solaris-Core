@@ -48,7 +48,8 @@ struct environment {
     solaris_deferred_t cancel;
     listener_fixture_t listeners[2];
     atomic_uint_fast64_t clock;
-    atomic_int spoof;
+    atomic_uint spoof_port;
+
     unsigned int accepted, opens, child_closes, closes, writes, shutdowns, reads, eofs, emitted;
     size_t read_bytes;
     uint8_t received[5];
@@ -162,14 +163,18 @@ static solaris_status_t accept_connection(void *context, const solaris_address_t
     }
     return SOLARIS_OK;
 }
-/* A real loopback TCP socket supplies the accepted stream. Only its peer IP
+/* A real loopback TCP socket supplies the accepted stream. Its peer
  * metadata is replaced with the synthetic kernel/TUN peer: Darwin cannot bind
  * an unconfigured adjacent address without changing host network settings. */
 static solaris_status_t fixture_accept(void *context, const solaris_address_t *peer, const solaris_address_t *local,
     solaris_stream_t *stream, solaris_stream_callbacks_t *callbacks, void **stream_context)
 {
     listener_fixture_t *fixture = context; solaris_address_t mapped = fixture->peer; mapped.port = peer->port;
-    if (atomic_load(&fixture->env->spoof)) mapped = *peer;
+    unsigned int spoof_port = atomic_load(&fixture->env->spoof_port);
+    if (spoof_port) {
+        mapped = *peer;
+        mapped.port = (uint16_t)spoof_port;
+    }
     return fixture->accept(fixture->context, &mapped, local, stream, callbacks, stream_context);
 }
 static void fixture_closed(void *context, solaris_status_t status)
@@ -309,7 +314,17 @@ static test_socket_t connect_client(environment_t *env, uint16_t port)
     CHECK(solaris_address_to_sockaddr(&source, &local) == SOLARIS_OK && solaris_address_to_sockaddr(&env->mapped_destination, &peer) == SOLARIS_OK);
     int length = family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
     CHECK(bind(fd, (const struct sockaddr *)&local, length) == 0);
-    CHECK(connect(fd, (const struct sockaddr *)&peer, length) == 0); return fd;
+    int rc = connect(fd, (const struct sockaddr *)&peer, length);
+    if (rc != 0) {
+#ifdef _WIN32
+        int error = WSAGetLastError();
+#else
+        int error = errno;
+#endif
+        fprintf(stderr, "TUN loopback connect failed: mode=%d family=%d local=%u peer=%u error=%d\n",
+            env->mode, env->family, (unsigned)port, (unsigned)env->mapped_destination.port, error);
+    }
+    CHECK(rc == 0); return fd;
 }
 static void reject_client(environment_t *env, uint16_t port)
 {
@@ -318,7 +333,7 @@ static void reject_client(environment_t *env, uint16_t port)
 }
 static void run(int mode, int family, int failure)
 {
-    environment_t env = {.mode = mode, .family = family}; atomic_init(&env.clock, 0u); atomic_init(&env.spoof, 0);
+    environment_t env = {.mode = mode, .family = family}; atomic_init(&env.clock, 0u); atomic_init(&env.spoof_port, 0u);
     CHECK(solaris_test_event_init(&env.ready, 0u) == 0 && solaris_test_event_init(&env.step, 0u) == 0 &&
         solaris_test_event_init(&env.opened, 0u) == 0 && solaris_test_event_init(&env.child_done, 0u) == 0 && solaris_test_event_init(&env.complete, 0u) == 0);
     solaris_runtime_services_t services; solaris_runtime_services_init(&services);
@@ -331,7 +346,12 @@ static void run(int mode, int family, int failure)
     if (mode == NATIVE_REJECT) {
         reject_client(&env, env.mapped_source.port); CHECK(solaris_executor_post(env.owner, stop, &env) == SOLARIS_OK);
     } else if (mode != ALLOCATE) {
-        atomic_store(&env.spoof, 1); reject_client(&env, env.mapped_source.port); atomic_store(&env.spoof, 0);
+        /* Present the correct NAT port and a wrong IP to the accept hook.
+         * Use a different OS source port so the subsequent valid connection
+         * does not reuse the rejected connection's TCP four-tuple. */
+        atomic_store(&env.spoof_port, env.mapped_source.port);
+        reject_client(&env, (uint16_t)(env.mapped_source.port + 11u));
+        atomic_store(&env.spoof_port, 0u);
         reject_client(&env, (uint16_t)(env.mapped_source.port + 10u));
         if (mode == IDLE) {
             atomic_store(&env.clock, UINT64_C(2000000000)); solaris_executor_wake(env.owner);

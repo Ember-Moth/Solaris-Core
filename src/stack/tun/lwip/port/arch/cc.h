@@ -1,6 +1,19 @@
 #ifndef SOLARIS_LWIP_CC_H
 #define SOLARIS_LWIP_CC_H
 #include <stdint.h>
+#ifdef _MSC_VER
+/* Share the pointer-sized Windows definition with libuv, even in lwIP
+ * translation units which do not include uv.h. MSVC has no unistd.h. */
+#if !defined(_SSIZE_T_) && !defined(_SSIZE_T_DEFINED)
+typedef intptr_t ssize_t;
+#define _SSIZE_T_
+#define _SSIZE_T_DEFINED
+#endif
+#ifndef SSIZE_MAX
+#define SSIZE_MAX INTPTR_MAX
+#endif
+#define LWIP_NO_UNISTD_H 1
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 uint32_t solaris_lwip_random(void);
