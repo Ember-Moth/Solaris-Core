@@ -87,15 +87,15 @@ def control_probe(port, targets, username="", password=""):
         exchange("127.0.0.1", targets[0], b"control")
         try:
             exchange("127.0.0.1", targets[0], b""); empty = True
-        except socket.timeout:
+        except (socket.timeout, ConnectionResetError):
             empty = False
         try:
             source = exchange("localhost", targets[0], b"mixed-domain"); mixed_domain = True; numeric_mixed = source[2] != 3
-        except socket.timeout:
+        except (socket.timeout, ConnectionResetError):
             mixed_domain = False; numeric_mixed = False
         try:
             exchange("::1", targets[2], b"mixed-v6"); mixed_v6 = True
-        except socket.timeout:
+        except (socket.timeout, ConnectionResetError):
             mixed_v6 = False
     finally:
         udp.close(); control.close()

@@ -112,6 +112,7 @@ def main():
             except OSError:
                 break
 
+    log = None
     with tempfile.TemporaryDirectory(prefix="solaris-interop-") as directory:
         root = Path(directory)
         try:
@@ -205,6 +206,8 @@ def main():
                 except subprocess.TimeoutExpired:
                     peer.kill()
                     peer.wait()
+            if log is not None:
+                log.close()
 
 
 if __name__ == "__main__":

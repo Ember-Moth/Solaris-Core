@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Independent raw IPv4/IPv6 TCP peer for the in-memory lwIP stream bridge."""
 import ipaddress
-import os
-import select
+import queue
+import threading
 import struct
 import subprocess
 import sys
@@ -56,17 +56,28 @@ def decode(wire):
 class Harness:
     def __init__(self, binary):
         self.process = subprocess.Popen([binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        self.chunks = queue.Queue()
+        self.reader = threading.Thread(target=self._read_pipe, daemon=True)
+        self.reader.start()
         self.buffer = bytearray()
         self.events = []
         self.history = []
+
+    def _read_pipe(self):
+        while True:
+            chunk = self.process.stdout.read(65536)
+            self.chunks.put(chunk)
+            if not chunk:
+                return
 
     def read(self, timeout=5):
         deadline = time.monotonic() + timeout
         while len(self.buffer) < 5 or len(self.buffer) < 5 + struct.unpack_from("!I", self.buffer, 1)[0]:
             remaining = deadline - time.monotonic()
-            if remaining <= 0 or not select.select([self.process.stdout], [], [], remaining)[0]:
-                raise TimeoutError(f"event timeout; pending {[kind for kind, _ in self.events]}")
-            chunk = os.read(self.process.stdout.fileno(), 65536)
+            try:
+                chunk = self.chunks.get(timeout=max(0, remaining))
+            except queue.Empty:
+                raise TimeoutError(f"event timeout; pending {[kind for kind, _ in self.events]}") from None
             if not chunk:
                 raise RuntimeError(self.process.stderr.read().decode())
             self.buffer.extend(chunk)

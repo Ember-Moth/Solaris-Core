@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import socket
 import ssl
+import sys
 import subprocess
 import tempfile
 import threading
@@ -14,6 +15,10 @@ import time
 
 UUID = "7b4bb031-41b5-4d1d-b062-1ea0cab957c1"
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from child_process import run as run_child
+from loopback import tcp_udp_pair
 
 def main():
     parser = argparse.ArgumentParser()
@@ -112,7 +117,7 @@ def main():
                 nonlocal expected
                 target = targets[("::1" if host == "[::1]" else "127.0.0.1", tls)]
                 base = f"{'https' if tls else 'http'}://{host}:{target}"
-                result = subprocess.run([args.client, kind, str(port), credential, cipher, str(ca), str(cert) if tls else "-",
+                result = run_child([args.client, kind, str(port), credential, cipher, str(ca), str(cert) if tls else "-",
                                          base + "/ok", base + "/fail", str(failure), *extra], capture_output=True, text=True, timeout=20)
                 if result.returncode:
                     logs = []
@@ -138,7 +143,8 @@ def main():
             if "socks5" in args.types:
                 cases += [("socks5", "-", "-", False), ("socks5", "password", "solaris", False)]
             for kind, credential, cipher, tls in cases:
-                sock = socket.socket(); sock.bind(("127.0.0.1", 0)); sockets.append(sock); reservations.append(sock)
+                sock, udp, guard = tcp_udp_pair(socket.AF_INET)
+                sockets.extend((sock, udp, guard)); reservations.extend((sock, udp))
                 inbound = {"type": "socks" if kind == "socks5" else kind, "listen": "127.0.0.1", "listen_port": sock.getsockname()[1]}
                 if kind == "vless":
                     inbound["users"] = [{"uuid": credential}]

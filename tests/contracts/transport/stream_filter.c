@@ -294,6 +294,7 @@ static void advance_clock(void *context, solaris_status_t status)
 }
 static void run(int mode, int failure)
 {
+    fprintf(stderr, "stream filter mode %d allocation %d\n", mode, failure);
     environment_t env = {.mode = mode, .initial_failure = failure}; atomic_init(&env.closed, 0u); atomic_init(&env.clock, 0u);
     CHECK(solaris_test_event_init(&env.started, 0u) == 0 && solaris_test_event_init(&env.pending, 0u) == 0 &&
         solaris_test_event_init(&env.cancelled, 0u) == 0 && solaris_test_event_init(&env.complete, 0u) == 0);

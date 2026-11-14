@@ -211,7 +211,7 @@ def no_admission(port):
         with connect(port) as conn:
             conn.sendall(b'\x05\x01\x00')
             assert all_bytes(conn) == b''
-    except (ConnectionRefusedError, ConnectionResetError):
+    except (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError):
         pass
 
 

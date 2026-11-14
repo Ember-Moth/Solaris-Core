@@ -38,7 +38,7 @@ def all_bytes(sock):
     while True:
         try:
             part = sock.recv(65536)
-        except ConnectionResetError:
+        except (ConnectionResetError, ConnectionAbortedError):
             break
         if not part:
             break
@@ -546,7 +546,7 @@ def test(binary):
                     try:
                         client.recv(1024)
                         raise AssertionError('UDP survived control close')
-                    except socket.timeout:
+                    except (socket.timeout, ConnectionResetError):
                         pass
             h.stop()
             print(f'protocol={protocol} auth={auth}: transfer and close passed', flush=True)

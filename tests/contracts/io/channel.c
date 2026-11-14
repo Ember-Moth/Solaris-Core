@@ -439,8 +439,14 @@ int main(int argc, char **argv)
     deny_case_t deny; memset(&deny, 0, sizeof(deny)); deny.executor = solaris_runtime_executor(engine, 0u);
     CHECK(solaris_test_event_init(&deny.done, 0) == 0 && solaris_address_parse("127.0.0.1", ports[0], &deny.destination) == SOLARIS_OK);
     CHECK(solaris_executor_post(deny.executor, deny_paths, &deny) == SOLARIS_OK); solaris_test_event_wait(&deny.done);
-    for (size_t i = 0; i < 6u; i++) solaris_test_event_wait(&tcp[i].done);
-    for (size_t i = 0; i < 3u; i++) solaris_test_event_wait(&udp[i].done);
+    for (size_t i = 0; i < 6u; i++) {
+        fprintf(stderr, "Await TCP case %zu\n", i);
+        solaris_test_event_wait(&tcp[i].done);
+    }
+    for (size_t i = 0; i < 3u; i++) {
+        fprintf(stderr, "Await UDP case %zu\n", i);
+        solaris_test_event_wait(&udp[i].done);
+    }
     for (size_t i = 0; i < 3u; i++) {
         CHECK(tcp[i].open_status == SOLARIS_OK && tcp[i].close_status == SOLARIS_OK);
         CHECK(tcp[i].writes == 2u && tcp[i].shutdowns == 1u && tcp[i].eof == 1u && tcp[i].backpressure == 1u);

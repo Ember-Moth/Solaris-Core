@@ -43,9 +43,9 @@ class RecipeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="solaris-recipe-") as temp:
             root = Path(temp).resolve(); project = root / "project"; source = root / "upstream"; output = root / "patched"
             (project / "dependencies").mkdir(parents=True); source.mkdir()
-            (source / "hello.txt").write_text("upstream\n")
+            (source / "hello.txt").write_bytes(b"upstream\n")
             patch = project / "change.patch"
-            patch.write_text("--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-upstream\n+patched\n")
+            patch.write_bytes(b"--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-upstream\n+patched\n")
             lock = {"source_tree_sha256": RECIPE.tree_hash(source), "patches": [
                 {"path": "change.patch", "sha256": hashlib.sha256(patch.read_bytes()).hexdigest()}]}
             lock_path = project / "dependencies/lock.json"
@@ -59,7 +59,7 @@ class RecipeTest(unittest.TestCase):
             (output / "hello.txt").write_text("tampered\n")
             with self.assertRaisesRegex(ValueError, "patched.*modified"):
                 RECIPE.prepare(project, source, output)
-            (output / "hello.txt").write_text("patched\n")
+            (output / "hello.txt").write_bytes(b"patched\n")
             original = patch.read_bytes(); patch.write_bytes(original + b"\n")
             with self.assertRaisesRegex(ValueError, "patch checksum"):
                 RECIPE.prepare(project, source, output)
@@ -67,7 +67,7 @@ class RecipeTest(unittest.TestCase):
             (source / "hello.txt").write_text("wrong version\n")
             with self.assertRaisesRegex(ValueError, "pristine"):
                 RECIPE.prepare(project, source, output)
-            (source / "hello.txt").write_text("upstream\n")
+            (source / "hello.txt").write_bytes(b"upstream\n")
             # A changed series always starts from pristine, not already patched text.
             patch.write_bytes(original.replace(b"+patched\n", b"+updated\n"))
             lock["patches"][0]["sha256"] = hashlib.sha256(patch.read_bytes()).hexdigest()

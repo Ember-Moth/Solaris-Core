@@ -6,10 +6,14 @@ from pathlib import Path
 import shutil
 import socket
 import ssl
+import sys
 import subprocess
 import tempfile
 import threading
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from child_process import run as run_child
 
 def main():
     parser = argparse.ArgumentParser()
@@ -91,7 +95,7 @@ def main():
                 sock.settimeout(0.1)
                 listeners.append(sock)
                 threading.Thread(target=listen, args=(sock, mode), daemon=True).start()
-            result = subprocess.run([args.client, str(root / "trusted.pem"),
+            result = run_child([args.client, str(root / "trusted.pem"),
                                      *(str(s.getsockname()[1]) for s in listeners)],
                                     capture_output=True, text=True, timeout=20)
             print(result.stdout, end="")

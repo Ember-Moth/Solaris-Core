@@ -3,9 +3,14 @@
 import argparse
 import json
 import socket
+from pathlib import Path
+import sys
 import subprocess
 import threading
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from child_process import run as run_child
 
 def main():
     parser = argparse.ArgumentParser()
@@ -115,7 +120,7 @@ def main():
         for sock, alt in [(a, alternate), (b, None), (udp6, None)]:
             threading.Thread(target=udp_listener, args=(sock, alt), daemon=True).start()
         ports = [sock.getsockname()[1] for sock in [tcp4, tcp6, a, b, alternate, udp6]]
-        result = subprocess.run([args.client, *map(str, ports)], text=True, capture_output=True, timeout=30)
+        result = run_child([args.client, *map(str, ports)], text=True, capture_output=True, timeout=30)
         print(result.stdout, end="")
         if result.returncode:
             raise RuntimeError(f"client failed ({result.returncode}):\n{result.stderr}")

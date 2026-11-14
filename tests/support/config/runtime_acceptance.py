@@ -199,7 +199,7 @@ def routing_and_udp(runtime, ports, first, second, without_socks):
         if removal:
             def listener_released():
                 try:
-                    with socket.create_connection(('127.0.0.1', socks), timeout=.05):
+                    with socket.create_connection(('127.0.0.1', socks), timeout=3):
                         return False
                 except ConnectionRefusedError:
                     return True
