@@ -373,8 +373,8 @@ solaris_status_t solaris_http_request_create(solaris_budget_t *budget, const uin
             goto failed;
         r->websocket = m->websocket = 1;
     }
-    char canonical[280], provided[280];
-    solaris_address_t host_address;
+    char canonical[280], provided[280] = {0};
+    solaris_address_t host_address = {0};
     if (hosts && authority(host.value, host.value_length, 0, &host_address, provided, sizeof(provided)) != SOLARIS_OK)
         goto failed;
     const uint8_t *path = uri;
