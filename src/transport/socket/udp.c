@@ -19,7 +19,8 @@ typedef struct solaris_udp {
     uint32_t family;
     int initialized, accepted, open_delivered, open_scheduled, native_closing;
     int close_requested, read_desired, reading, writable_requested;
-    int policy_retained;
+    int policy_retained, listener;
+    char discard;
 } solaris_udp_t;
 
 typedef struct solaris_udp_send {
@@ -110,7 +111,9 @@ static void alloc_read(uv_handle_t *native, size_t suggested, uv_buf_t *buffer)
     assert(udp->receive_buffer == NULL);
     if (solaris_buffer_allocate(solaris_executor_budget(udp->scope.owner), 65536u,
                                  &udp->receive_buffer) != SOLARIS_OK) {
-        buffer->base = NULL; buffer->len = 0u;
+        if (udp->listener)
+            *buffer = uv_buf_init(&udp->discard, 1u); /* drain this packet even under memory pressure */
+        else { buffer->base = NULL; buffer->len = 0u; }
         return;
     }
     *buffer = uv_buf_init((char *)solaris_buffer_mutable_data(udp->receive_buffer),
@@ -137,6 +140,9 @@ static void on_read(uv_udp_t *native, ssize_t count, const uv_buf_t *buffer,
             udp->stats.packets_read++;
             udp->callbacks.on_packet(udp->context, &udp->datagram, &address, received);
         } else udp->stats.dropped_packets++;
+    } else if (udp->listener && (count == UV_ECONNRESET || count == UV_ECONNREFUSED || count == UV_EMSGSIZE)) {
+        /* Errors from a previous reply are specific to that peer. */
+        udp->stats.dropped_packets++;
     } else if (!udp->scope.cancelled && count < 0) {
         udp->stats.last_system_error = (int32_t)count;
         close_with_status(udp, solaris_socket_status((int)count));
@@ -226,15 +232,15 @@ static const solaris_datagram_ops_t datagram_ops = {
     send_packet, set_reading, close_datagram, snapshot, local_address
 };
 
-solaris_status_t solaris_dialer_open_datagram(solaris_executor_t *executor,
+static solaris_status_t open_datagram(solaris_executor_t *executor,
                                               const solaris_dialer_options_t *options,
                                               uint32_t family,
                                               const solaris_datagram_callbacks_t *callbacks,
-                                              void *context, solaris_datagram_t **out)
+                                              void *context, solaris_datagram_t **out, int listener)
 {
     if (out == NULL) return SOLARIS_EINVAL;
     *out = NULL;
-    if (executor == NULL || callbacks == NULL || callbacks->on_open == NULL ||
+    if (executor == NULL || callbacks == NULL || (!listener && callbacks->on_open == NULL) ||
         callbacks->on_packet == NULL || callbacks->on_close == NULL ||
         (family != SOLARIS_ADDRESS_IPV4 && family != SOLARIS_ADDRESS_IPV6)) return SOLARIS_EINVAL;
     if (!solaris_executor_is_owner(executor)) return SOLARIS_ETHREAD;
@@ -258,7 +264,7 @@ solaris_status_t solaris_dialer_open_datagram(solaris_executor_t *executor,
     udp->options = selected; udp->callbacks = *callbacks; udp->context = context; udp->family = family;
     udp->datagram.ops = &datagram_ops; udp->datagram.state = udp; udp->datagram.owner = executor;
     udp->opened.run = deliver_open; udp->opened.context = udp;
-    udp->read_desired = 1;
+    udp->read_desired = 1; udp->listener = listener;
     udp->stats.max_message_bytes = family == SOLARIS_ADDRESS_IPV6 ? 65527u : 65507u;
     rc = solaris_scope_init(&udp->scope, executor, on_cancel, on_done, udp);
     if (rc != SOLARIS_OK) { solaris_memory_free(udp); return rc; }
@@ -291,9 +297,33 @@ solaris_status_t solaris_dialer_open_datagram(solaris_executor_t *executor,
     if (rc == SOLARIS_OK && selected.async_policy.start)
         rc = solaris_socket_prepare_async(&selected, executor, (uv_handle_t *)&udp->native,
             family, SOLARIS_SOCKET_UDP, deadline_ns, &udp->scope, preparation_done, udp, &udp->preparation);
+    if (rc == SOLARIS_OK && listener) {
+        /* prepare must establish receive readiness before publication. The
+         * loop cannot enter the callback inline on this owner thread. */
+        udp->open_delivered = 1;
+        rc = set_reading(udp, 1);
+    }
     if (rc != SOLARIS_OK) { close_with_status(udp, rc); return rc; }
     udp->accepted = 1;
-    if (!udp->preparation) schedule_open(udp, SOLARIS_OK);
+    if (!listener && !udp->preparation) schedule_open(udp, SOLARIS_OK);
     *out = &udp->datagram;
     return SOLARIS_OK;
+}
+
+solaris_status_t solaris_dialer_open_datagram(solaris_executor_t *owner, const solaris_dialer_options_t *options,
+    uint32_t family, const solaris_datagram_callbacks_t *callbacks, void *context, solaris_datagram_t **out)
+{
+    return open_datagram(owner, options, family, callbacks, context, out, 0);
+}
+
+solaris_status_t solaris_udp_listener_open_scoped(solaris_scope_t *parent, const solaris_address_t *local,
+    const solaris_datagram_callbacks_t *callbacks, void *context, solaris_datagram_t **out)
+{
+    if (out) *out = NULL;
+    if (!parent || !local) return SOLARIS_EINVAL;
+    solaris_dialer_options_t options;
+    solaris_dialer_options_init(&options);
+    options.local_bind = *local;
+    options.parent_scope = parent;
+    return open_datagram(parent->owner, &options, local->family, callbacks, context, out, 1);
 }

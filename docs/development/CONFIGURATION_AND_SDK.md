@@ -126,6 +126,8 @@ Authentication 每个 profile 是逗号分隔的 `用户名=密码` 列表，至
 ```ini
 [DNS]
 enabled = true
+use-system-hosts = false
+listen = 127.0.0.1:1053
 upstream = udp://127.0.0.1:5353, tcp://[::1]:5353
 proxy-upstream = 127.0.0.2
 ipv6 = true
@@ -152,7 +154,15 @@ DNS 的所有上游必须是数字 IP，裸地址默认 UDP/53；也接受 `udp:
 | `mode` | 缺省或 normal；Fake-IP 答复尚未接线 |
 | `cache-algorithm` | 缺省或 lru |
 | `cache-size` | 缺省/0 使用现有 4096 项上限，也可显式 4096；其他值暂不支持 |
-| `listen` | 缺省或空字符串；非空 DNS 监听尚未接线 |
+| `listen` | 缺省、空字符串或 `off` 关闭监听。启用时填写数字 IPv4:port 或 [IPv6]:port，端口 1–65535，同时设置 `enabled=true` |
+
+示例在 IPv4 回环端口 1053 上提供 UDP 和 TCP，并使用端口 5353 上的独立上游。宿主只需一条名为 `dns`、协议为 `SOLARIS_LISTENER_DNS` 的监听记录。使用该 ID 在 prepare 时覆盖为端口 0，两个传输会绑定同一临时端口。prepared 与 active 的监听快照均报告真实端点。DNS 监听使用客户端查询角色的 `upstream`，并遵循 `use-hosts`。
+
+prepare 成对绑定两个 socket，commit 发布后接纳查询。任一绑定失败会回收候选的两个端点，旧配置继续服务。编译检查明确的上游自引用，prepare 再按宿主覆盖后的实际端点检查，通配监听会核对同端口的本机接口地址。同端点的 DNS 配置热更新复用物理监听。原有 TCP 连接和在途 UDP 请求沿用接纳时的配置，新连接和新数据报使用已发布的配置。`stop` 会关闭接纳并排空连接、查询回调与发送。
+
+UDP 普通回复上限为 512 字节。带 EDNS 的回复受客户端通告值和 1232 字节服务上限约束，超出时设置 TC，客户端可用 TCP 获取完整答复。两跳分别协商 EDNS 大小。TCP 使用两字节长度前缀，允许分片、合并帧和按查询 ID 匹配的乱序回复。上游失败返回 SERVFAIL，格式无效的 UDP 查询丢弃，格式无效的 TCP 帧关闭对应连接。如果修改 OPT 会破坏未知记录中的压缩偏移，也返回 SERVFAIL。
+
+每个监听代际最多 128 条 TCP 连接、256 个在途查询或回复，每条 TCP 连接最多 16 个流水请求。输入和回复的缓冲另受 8 MiB 上限及 engine 总预算约束。查询与未完成的 TCP 帧使用 5 秒期限，TCP 空闲 30 秒后回收。
 
 Host 单值可以是数值地址或域名别名；多个值必须全部是无 scope 的数值地址，IPv4-mapped IPv6 会归一为 IPv4，地址顺序与重复项保留。
 Host 名称为 ASCII，折叠大小写、去除一个尾点；每个 label 最多 63 字节，完整名称最多 253 字节。

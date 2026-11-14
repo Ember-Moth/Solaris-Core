@@ -988,7 +988,9 @@ DNS 测试 worker 不另建一套 operation 表，Fake-IP 不自行重建 TUN，
 M3-01 的 DNS 角色通过 `config_dns_roles_contract` 从文件编译、prepare/commit 到真实代理流量验收。`installed_consumer` 对搬迁后的安装包独立构建 C 宿主并执行同一用例。
 本批覆盖 Host 别名、UDP/TCP DNS、CIDR 路由解析、Direct 和代理服务器的独立上游、NXDOMAIN、拒绝候选后旧解析服务继续可用，以及成功 reload 后同名查询与旧流保活。macOS arm64 本地共享构建相关 5 项、静态构建相关 3 项和 ASan/UBSan 配置用例 2 项通过。共享和静态安装消费均执行了原生文件宿主用例。
 
-后续 M3-01 优先项为本地 UDP/TCP DNS 监听、域名与后缀策略、严格网络模式下各角色的集成验收。
+本地 UDP/TCP DNS 监听已接入原生 `[DNS] listen` 与公开监听快照。验收入口 `dns_listener_contract` 和 `installed_consumer` 覆盖 UDP/TCP 同端口、候选接纳隔离、绑定失败回滚、EDNS/TC、TCP 流水、跨连接取消，以及热更新和停启排空。`config_slots_contract` 覆盖成对绑定期间的逐点分配失败与端口回收。
+
+后续 M3-01 优先项为域名与后缀策略、严格网络模式下各角色的集成验收。
 
 ## 7. M4：按需策略与资源管理
 

@@ -1,5 +1,6 @@
 #include "contracts/config/dns.h"
 #include "config/image/internal.h"
+#include "solaris_builtin_modules.h"
 #include <solaris/core.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +15,7 @@
 #define DIRECT "[General]\nconfig-version=1\nmode=direct\n"
 static const char sample[] =
     DIRECT "[Host]\napi.test = 127.0.0.2, ::1\nalias.test = api.test\n"
-           "[DNS]\nenabled=true\nipv6=true\nipv6-wait-ms=75\nuse-hosts=false\nuse-system-hosts=false\n"
+           "[DNS]\nenabled=true\nlisten=127.0.0.1:5300\nipv6=true\nipv6-wait-ms=75\nuse-hosts=false\nuse-system-hosts=false\n"
            "upstream = 127.0.0.1:5353, tcp://[::1]:5354\nproxy-upstream=udp://127.0.0.3:5355\n"
            "direct-upstream=tcp://127.0.0.4:5356\nbootstrap-upstream=127.0.0.5\n";
 static solaris_config_t *valid(const char *text) {
@@ -82,7 +83,60 @@ static size_t allocation_case(size_t failure) {
     CHECK(!a.live);
     return a.calls;
 }
+static void listener_contract(void) {
+    static const char *disabled[] = {DIRECT, DIRECT "[DNS]\nenabled=false\nlisten=off\n",
+                                     DIRECT "[DNS]\nenabled=false\nlisten=\"\"\n",
+                                     DIRECT "[DNS]\nenabled=true\nupstream=127.0.0.1:5354\n"};
+    for (size_t i = 0; i < sizeof(disabled) / sizeof(*disabled); ++i) {
+        solaris_config_t *image = valid(disabled[i]);
+        solaris_config_snapshot_t snapshot;
+        CHECK(solaris_config_get_snapshot(image, &snapshot) == SOLARIS_OK && !snapshot.listener_count);
+        solaris_config_release(image);
+    }
+
+    uint64_t dns_id = 0;
+    static const char *addresses[] = {"127.0.0.1", "::1"};
+    static const char *inputs[] = {DIRECT "[DNS]\nenabled=true\nlisten=127.0.0.1:5353\nupstream=127.0.0.1:5354\n",
+                                   DIRECT "[DNS]\nenabled=true\nlisten=[::1]:5353\nupstream=tcp://[::1]:5354\n"};
+    for (size_t i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i) {
+        solaris_config_t *image = valid(inputs[i]);
+        solaris_config_listener_info_t info;
+        solaris_config_snapshot_t snapshot;
+        CHECK(solaris_config_get_snapshot(image, &snapshot) == SOLARIS_OK && snapshot.listener_count == 1);
+        CHECK(solaris_config_get_listener(image, 0, &info) == SOLARIS_OK && info.protocol == SOLARIS_LISTENER_DNS);
+        CHECK(info.id && !strcmp(info.name, "dns") && !strcmp(info.address, addresses[i]) && info.port == 5353);
+        CHECK(!strcmp(info.configured_address, addresses[i]) && info.configured_port == info.port);
+        CHECK(!strcmp(info.requested_address, addresses[i]) && info.requested_port == info.port);
+        CHECK(!info.binding_overridden && info.udp_enabled && !info.authentication_required && info.worker_id == UINT32_MAX);
+        if (!i)
+            dns_id = info.id;
+        else
+            CHECK(info.id == dns_id);
+        solaris_config_release(image);
+    }
+
+#define DNS_LISTEN DIRECT "[DNS]\nenabled=true\nupstream=127.0.0.1:5454\nlisten="
+    static const char *bad[] = {DIRECT "[DNS]\nlisten=127.0.0.1:53\n",
+                                DNS_LISTEN "resolver.test:53", DNS_LISTEN "127.0.0.1", DNS_LISTEN "127.0.0.1:0",
+                                DNS_LISTEN "127.0.0.1:65536", DNS_LISTEN "::1:53", DNS_LISTEN "[::1%test]:53",
+                                DNS_LISTEN "[127.0.0.1]:53", DNS_LISTEN "udp://127.0.0.1:53",
+                                DNS_LISTEN "127.0.0.1:5454", DNS_LISTEN "0.0.0.0:5454",
+                                DIRECT "[DNS]\nenabled=true\nlisten=[::]:53\nupstream=[::1]:53",
+                                DIRECT "[DNS]\nenabled=true\nlisten=127.0.0.1:53\n"
+                                       "upstream=127.0.0.1:5454,tcp://[::ffff:127.0.0.1]:53"};
+    for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); ++i)
+        invalid(bad[i], SOLARIS_EINVAL);
+    solaris_config_t *roles = valid(DNS_LISTEN "127.0.0.1:5353\ndirect-upstream=127.0.0.1:5353");
+    solaris_config_release(roles);
+#if SOLARIS_HAS_PROXY_INBOUND
+    invalid(DNS_LISTEN "127.0.0.1:5353\n[Listener]\ndns=socks5,127.0.0.1,5354", SOLARIS_EINVAL);
+    invalid(DNS_LISTEN "127.0.0.1:5353\n[Listener]\nweb=http,127.0.0.1,5353", SOLARIS_EINVAL);
+    invalid(DNS_LISTEN "127.0.0.1:5353\n[Listener]\nweb=http,0.0.0.0,5353", SOLARIS_EINVAL);
+#endif
+#undef DNS_LISTEN
+}
 int main(void) {
+    listener_contract();
     solaris_config_t *image = valid(DIRECT);
     CHECK(!solaris_config_dns(image));
     solaris_config_release(image);
@@ -124,7 +178,6 @@ int main(void) {
     const char *unsupported[] = {DIRECT
                                  "[DNS]\nenabled=true\nupstream=https://user:synthetic-secret@example.test/dns-query\n",
                                  DIRECT "[DNS]\nupstream=dns.example.test\n",
-                                 DIRECT "[DNS]\nlisten=127.0.0.1:53\n",
                                  DIRECT "[DNS]\nmode=fake-ip\n",
                                  DIRECT "[DNS]\ncache-algorithm=arc\n",
                                  DIRECT "[DNS]\ncache-size=128\n",

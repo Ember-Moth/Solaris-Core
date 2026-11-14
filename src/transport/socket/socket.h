@@ -66,4 +66,10 @@ solaris_status_t solaris_dialer_open_datagram(solaris_executor_t *executor,
                                               const solaris_datagram_callbacks_t *callbacks,
                                               void *context, solaris_datagram_t **out);
 
+/* Owner-only paired listener setup. Successful return means bind and receive
+ * are ready. No on_open callback. Accepted on_close and rejected native cleanup
+ * are both fenced by parent. Replies use the normal bounded datagram API. */
+solaris_status_t solaris_udp_listener_open_scoped(solaris_scope_t *parent, const solaris_address_t *local,
+    const solaris_datagram_callbacks_t *callbacks, void *context, solaris_datagram_t **out);
+
 #endif

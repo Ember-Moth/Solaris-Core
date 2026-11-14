@@ -61,6 +61,7 @@ def main():
     parser.add_argument("--cmake", default="cmake")
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--runtime-proxy", action="store_true")
+    parser.add_argument("--dns-listener", action="store_true")
     parser.add_argument("--runtime-protocols", action="store_true")
     parser.add_argument("--runtime-advanced", action="store_true")
     parser.add_argument("--peer")
@@ -97,7 +98,7 @@ def main():
                 raise SystemExit(f"missing installed dependency notice: {relative}")
         source = work / "consumer"
         shutil.copytree(args.source, source)
-        if args.runtime_proxy:
+        if args.runtime_proxy or args.dns_listener:
             shutil.copy2(Path(args.source).resolve().parent / "sdk/runtime_proxy.c", source / "runtime_proxy.c")
         consumer_build = work / "consumer-build"
         command = [args.cmake, "-S", str(source), "-B", str(consumer_build),
@@ -109,7 +110,7 @@ def main():
         cxx = paired_cxx_compiler(args.compiler)
         if cxx is not None:
             command.append(f"-DCMAKE_CXX_COMPILER={cxx}")
-        if args.runtime_proxy:
+        if args.runtime_proxy or args.dns_listener:
             command.append("-DSOLARIS_CONSUMER_RUNTIME_PROXY=ON")
         run(command)
         run([args.cmake, "--build", str(consumer_build), "--config", args.config])
@@ -118,8 +119,12 @@ def main():
         ctest = str(Path(args.cmake).with_name("ctest.exe" if os.name == "nt" else "ctest"))
         run([ctest, "--test-dir", str(consumer_build), "--build-config", args.config,
              "--output-on-failure"], env=environment)
-        if args.runtime_proxy:
+        if args.runtime_proxy or args.dns_listener:
             executable = executable_path(consumer_build, args.config, "runtime_proxy")
+        if args.dns_listener:
+            run([sys.executable, str(Path(args.source).resolve().parent / "support/config/dns_listener.py"),
+                 str(executable)], env=environment)
+        if args.runtime_proxy:
             run([sys.executable, str(Path(args.source).resolve().parent / "support/config/runtime_proxy.py"),
                  str(executable)], env=environment)
             run([sys.executable, str(Path(args.source).resolve().parent / "support/config/runtime_control.py"),

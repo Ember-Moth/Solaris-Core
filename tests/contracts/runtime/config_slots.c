@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #define CHECK(x)                                                                                             \
     do                                                                                                       \
     {                                                                                                        \
@@ -26,14 +29,26 @@ typedef struct fixture
     solaris_scope_t parent;
     solaris_deferred_t release;
     atomic_int fail_after;
+    atomic_uint allocations, gate_failure;
+    solaris_test_event_t at_failure, allow_failure, old_accept;
+    solaris_config_slot_key_t pair;
+    solaris_address_t pair_bound;
+    int pair_fail_after;
+    unsigned pair_allocations;
     unsigned command;
 } fixture_t;
 static void *allocate(void *context, size_t size)
 {
     fixture_t *f = context;
+    atomic_fetch_add(&f->allocations, 1);
     int remaining = atomic_load(&f->fail_after);
-    if (!remaining)
+    if (!remaining) {
+        if (atomic_exchange(&f->gate_failure, 0)) {
+            solaris_test_event_signal(&f->at_failure);
+            solaris_test_event_wait(&f->allow_failure);
+        }
         return NULL;
+    }
     if (remaining > 0)
         atomic_fetch_sub(&f->fail_after, 1);
     return malloc(size);
@@ -43,15 +58,25 @@ static solaris_status_t accept_stream(void *context, solaris_config_slot_t *slot
                                       solaris_stream_t *stream, solaris_stream_callbacks_t *callbacks,
                                       void **stream_context)
 {
-    (void)context;
-    (void)slot;
-    (void)owner;
+    fixture_t *f = context;
+    CHECK(slot == f->a && owner == f->owners[0]);
+    solaris_test_event_signal(&f->old_accept);
     (void)peer;
     (void)local;
     (void)stream;
     (void)callbacks;
     (void)stream_context;
     return SOLARIS_EACCESS;
+}
+static void unexpected_packet(void *context, solaris_config_slot_t *slot, solaris_executor_t *owner,
+                              const solaris_address_t *peer, const solaris_buffer_t *packet)
+{
+    (void)context;
+    (void)slot;
+    (void)owner;
+    (void)peer;
+    (void)packet;
+    CHECK(0); /* The only packet in this test targets a partially acquired pair. */
 }
 static void parent_done(void *context)
 {
@@ -142,11 +167,99 @@ static void ignore_connection(uv_stream_t *server, int status)
     (void)server;
     (void)status;
 }
+static void attempt_pair(void *context, solaris_status_t status)
+{
+    fixture_t *f = context;
+    solaris_executor_t *owner = solaris_executor_current();
+    CHECK(status == SOLARIS_OK && owner == f->owners[1]);
+    CHECK(solaris_scope_init(&f->parent, owner, NULL, parent_done, f) == SOLARIS_OK);
+    unsigned before = atomic_load(&f->allocations);
+    atomic_store(&f->fail_after, f->pair_fail_after);
+    solaris_config_slot_t *slot = (void *)1;
+    solaris_address_t bound = {0};
+    status = solaris_config_slot_acquire(f->slots, owner, &f->parent, &f->pair, &slot, &bound);
+    atomic_store(&f->fail_after, -1);
+    f->pair_allocations = atomic_load(&f->allocations) - before;
+    if (f->pair_fail_after >= 0) {
+        CHECK(status == SOLARIS_ENOMEM && !slot && !bound.port);
+    } else {
+        CHECK(status == SOLARIS_OK && slot && bound.port);
+        if (f->pair.address.port)
+            CHECK(solaris_address_equal(&bound, &f->pair.address));
+        f->pair_bound = bound;
+        solaris_config_slot_release(slot, &f->parent);
+    }
+    solaris_scope_cancel(&f->parent);
+    solaris_test_event_signal(&f->task);
+}
+static void contact_port(const solaris_address_t *address, int udp)
+{
+    struct sockaddr_in endpoint;
+    CHECK(!uv_ip4_addr("127.0.0.1", address->port, &endpoint));
+    uv_os_sock_t client = socket(AF_INET, udp ? SOCK_DGRAM : SOCK_STREAM, 0);
+#ifdef _WIN32
+    CHECK(client != INVALID_SOCKET);
+#else
+    CHECK(client >= 0);
+#endif
+    if (udp)
+        CHECK(sendto(client, "?", 1, 0, (const struct sockaddr *)&endpoint, sizeof(endpoint)) == 1);
+    else
+        CHECK(connect(client, (const struct sockaddr *)&endpoint, sizeof(endpoint)) == 0);
+#ifdef _WIN32
+    CHECK(closesocket(client) == 0);
+#else
+    CHECK(close(client) == 0);
+#endif
+}
+static void pair_round(fixture_t *f, int fail_after, int gate)
+{
+    size_t baseline = solaris_budget_used(f->budget);
+    f->pair_fail_after = fail_after;
+    atomic_store(&f->gate_failure, gate ? 1u : 0u);
+    CHECK(solaris_executor_post(f->owners[1], attempt_pair, f) == SOLARIS_OK);
+    if (gate) {
+        /* The TCP listen has succeeded. Queue a real connect and send a
+         * datagram before allowing the allocation for the second socket to
+         * fail. Neither may reach a slot callback after the owner resumes. */
+        solaris_test_event_wait(&f->at_failure);
+        contact_port(&f->pair.address, 0);
+        contact_port(&f->pair.address, 1);
+        solaris_test_event_signal(&f->allow_failure);
+    }
+    solaris_test_event_wait(&f->task);
+    solaris_test_event_wait(&f->drained);
+    CHECK(solaris_budget_used(f->budget) == baseline);
+    CHECK(solaris_config_slot_owner(f->slots, &f->pair, f->owners[0]) == f->owners[0]);
+}
+static void paired_rollback(fixture_t *f)
+{
+    f->pair = (solaris_config_slot_key_t){.address = f->first.address, .ephemeral_id = 3, .paired_udp = 1};
+    pair_round(f, -1, 0);
+    f->pair.address = f->pair_bound;
+    f->pair.ephemeral_id = 0;
+    /* Measure the fixed-port path; an ephemeral selection may have retried
+     * an occupied UDP port before returning its chosen pair. */
+    pair_round(f, -1, 0);
+    unsigned allocations = f->pair_allocations;
+    CHECK(allocations > 1);
+    for (unsigned i = 0; i < allocations; ++i) {
+        pair_round(f, (int)i, i + 1 == allocations);
+        pair_round(f, -1, 0); /* Immediate reuse of both ports after the parent fence. */
+    }
+    contact_port(&f->a_bound, 0);
+    solaris_test_event_wait(&f->old_accept);
+    printf("paired TCP/UDP: %u allocation failures, partial admission and immediate reuse passed\n", allocations);
+}
 int main(void)
 {
     fixture_t f = {0};
     atomic_init(&f.fail_after, -1);
+    atomic_init(&f.allocations, 0);
+    atomic_init(&f.gate_failure, 0);
     CHECK(!solaris_test_event_init(&f.task, 0) && !solaris_test_event_init(&f.drained, 0));
+    CHECK(!solaris_test_event_init(&f.at_failure, 0) && !solaris_test_event_init(&f.allow_failure, 0) &&
+          !solaris_test_event_init(&f.old_accept, 0));
     solaris_runtime_services_t services;
     solaris_runtime_services_init(&services);
     services.context = &f;
@@ -159,7 +272,7 @@ int main(void)
         CHECK(solaris_executor_create(&options, &f.owners[i]) == SOLARIS_OK);
         CHECK(solaris_executor_activate(f.owners[i], 1) == SOLARIS_OK);
     }
-    CHECK(solaris_config_slots_create(f.budget, accept_stream, &f, &f.slots) == SOLARIS_OK);
+    CHECK(solaris_config_slots_create(f.budget, accept_stream, unexpected_packet, &f, &f.slots) == SOLARIS_OK);
     CHECK(solaris_address_parse("127.0.0.1", 0, &f.first.address) == SOLARIS_OK);
     f.first.ephemeral_id = 1;
     f.second = f.first;
@@ -183,6 +296,7 @@ int main(void)
     command(&f, 3, 0);
     solaris_test_event_wait(&f.drained);
     command(&f, 5, 0);
+    paired_rollback(&f);
     command(&f, 4, 0);
     solaris_test_event_wait(&f.drained);
     CHECK(!solaris_config_slots_drained(f.slots));
@@ -206,6 +320,9 @@ int main(void)
     solaris_budget_release(f.budget);
     solaris_test_event_destroy(&f.task);
     solaris_test_event_destroy(&f.drained);
+    solaris_test_event_destroy(&f.at_failure);
+    solaris_test_event_destroy(&f.allow_failure);
+    solaris_test_event_destroy(&f.old_accept);
     puts("physical slots: stable owners, endpoint reuse, bind/allocation "
          "rollback, parent drain and stop release passed");
     return 0;

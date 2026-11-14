@@ -42,6 +42,12 @@ typedef struct solaris_config_node_info {
 } solaris_config_node_info_t;
 
 typedef struct solaris_prepared_config solaris_prepared_config_t;
+enum {
+    SOLARIS_LISTENER_HTTP = 1,
+    SOLARIS_LISTENER_SOCKS5 = 2,
+    SOLARIS_LISTENER_MIXED = 3,
+    SOLARIS_LISTENER_DNS = 4
+};
 typedef struct solaris_config_listener_info {
     uint64_t id;
     char name[128], address[256];
@@ -50,6 +56,8 @@ typedef struct solaris_config_listener_info {
     char configured_address[256], requested_address[256];
     uint16_t configured_port, requested_port;
     uint32_t binding_overridden;
+    /* SOLARIS_LISTENER_* protocol. DNS uses one listener ID and address/port
+     * for both TCP and UDP, including after a host ephemeral override. */
     uint32_t protocol, udp_enabled, authentication_required;
     /* UINT32_MAX for a compiled listener not assigned to a runtime owner. */
     uint32_t worker_id;
@@ -97,7 +105,7 @@ SOLARIS_API void solaris_config_prepare_options_init(solaris_config_prepare_opti
  * sets operation_id=0, retains nothing, and has no callback. callback required.
  * Only one prepare runs per engine; an accepted overlapping operation may
  * complete with EBUSY. Base revision is pinned when preparation starts.
- * Preparing may bind/listen on candidate ports, with proxy admission closed. */
+ * Preparing may bind candidate ports. Proxy and DNS admission begins at commit. */
 SOLARIS_API solaris_status_t solaris_engine_prepare_config(solaris_engine_t *engine,
     solaris_config_t *image, const solaris_config_prepare_options_t *options,
     solaris_config_prepare_callback_t callback, void *context,

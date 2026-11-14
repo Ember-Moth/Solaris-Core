@@ -2,6 +2,36 @@
 #include <stdio.h>
 #include <string.h>
 
+static int is_self_endpoint(const solaris_address_t *listener, const solaris_address_t *upstream) {
+    static const uint8_t zero[16] = {0};
+    static const uint8_t v6_loopback[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+    static const uint8_t mapped_prefix[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+    if (listener->port != upstream->port)
+        return 0;
+    if (solaris_address_equal(listener, upstream))
+        return 1;
+    if (listener->family == SOLARIS_ADDRESS_IPV4) {
+        const uint8_t *ip = upstream->ip;
+        if (upstream->family == SOLARIS_ADDRESS_IPV6 && !memcmp(ip, mapped_prefix, sizeof(mapped_prefix)))
+            ip += sizeof(mapped_prefix);
+        else if (upstream->family != SOLARIS_ADDRESS_IPV4)
+            return 0;
+        return !memcmp(listener->ip, ip, 4) || (!memcmp(listener->ip, zero, 4) && ip[0] == 127);
+    }
+    return listener->family == SOLARIS_ADDRESS_IPV6 && upstream->family == SOLARIS_ADDRESS_IPV6 &&
+           !memcmp(listener->ip, zero, sizeof(zero)) && !memcmp(upstream->ip, v6_loopback, sizeof(v6_loopback));
+}
+
+int solaris_config_dns_self_upstream(const solaris_config_dns_t *dns, const solaris_address_t *listener) {
+    if (!dns || !listener || !listener->port)
+        return 0;
+    const size_t role = SOLARIS_DNS_CLIENT_QUERY - 1;
+    for (size_t i = 0; i < dns->upstream_count[role]; ++i)
+        if (is_self_endpoint(listener, &dns->upstreams[role][i].address))
+            return 1;
+    return 0;
+}
+
 static int numeric_endpoint(const char *text, solaris_dns_upstream_t *out) {
     const char *host = text;
     out->transport = SOLARIS_DNS_TRANSPORT_UDP;
@@ -179,9 +209,6 @@ void cfg_dns_compile(cfg_context_t *c, cfg_node_t *root) {
         const char *mode = cfg_text(c, map, "mode", "DNS", 0, 32, 0);
         const char *algorithm = cfg_text(c, map, "cache-algorithm", "DNS", 0, 32, 0);
         uint64_t cache_size = cfg_uint(c, map, "cache-size", "DNS", 0, 0, 65536, 0);
-        if (listen && *listen)
-            cfg_fail(c, cfg_field(map, "listen"), "DNS.listen", SOLARIS_ENOTSUP,
-                     "DNS listener activation is not yet implemented");
         if (mode && strcmp(mode, "normal"))
             cfg_fail(c, cfg_field(map, "mode"), "DNS.mode", SOLARIS_ENOTSUP,
                      "Fake-IP DNS answer activation is not yet implemented");
@@ -210,6 +237,13 @@ void cfg_dns_compile(cfg_context_t *c, cfg_node_t *root) {
                 dns->upstream_count[role] = dns->upstream_count[SOLARIS_DNS_CLIENT_QUERY - 1];
             }
             dns->upstream_set_id[role] = role + 1;
+        }
+        if (!c->errors && listen && *listen && strcmp(listen, "off")) {
+            cfg_node_t *location = cfg_field(map, "listen");
+            if (!dns->enabled)
+                cfg_fail(c, location, "DNS.listen", SOLARIS_EINVAL, "DNS listener requires enabled=true");
+            else
+                cfg_add_dns_listener(c, location, listen);
         }
         if (dns->upstream_count[SOLARIS_DNS_CLIENT_QUERY - 1] > 1)
             cfg_diagnostic(c, map, "DNS.upstream", SOLARIS_DIAGNOSTIC_WARNING, SOLARIS_CONFIG_NORMALIZE, SOLARIS_OK,

@@ -567,25 +567,29 @@ static const auth_profile_t *auth_select(cfg_context_t *c, cfg_node_t *ref, cons
     cfg_fail(c, ref, "authentication", SOLARIS_EINVAL, "unknown authentication profile");
     return NULL;
 }
+static int wildcard_listener(const solaris_address_t *address) {
+    static const uint8_t zero[16] = {0};
+    return !memcmp(address->ip, zero, address->family == SOLARIS_ADDRESS_IPV4 ? 4 : 16);
+}
 static void add_listener(cfg_context_t *c, cfg_node_t *location, const char *path, const char *name, uint32_t protocol,
                          const char *host, uint64_t port, int udp, const solaris_config_auth_t *auth,
                          size_t auth_count) {
     if (!port)
         return;
 #if !SOLARIS_HAS_PROXY_INBOUND
-    (void)name;
-    (void)protocol;
-    (void)host;
-    (void)udp;
-    (void)auth;
-    (void)auth_count;
-    cfg_fail(c, location, path, SOLARIS_ENOTSUP, "proxy inbound support is disabled in this build");
-    return;
-#else
+    if (protocol != SOLARIS_LISTENER_DNS) {
+        cfg_fail(c, location, path, SOLARIS_ENOTSUP, "proxy inbound support is disabled in this build");
+        return;
+    }
+#endif
     solaris_address_t address;
     if (solaris_address_parse(host, (uint16_t)port, &address) != SOLARIS_OK ||
         address.family == SOLARIS_ADDRESS_DOMAIN) {
         cfg_fail(c, location, path, SOLARIS_EINVAL, "listener address must be numeric");
+        return;
+    }
+    if (protocol == SOLARIS_LISTENER_DNS && solaris_config_dns_self_upstream(c->image->dns, &address)) {
+        cfg_fail(c, location, path, SOLARIS_EINVAL, "DNS listener would forward to itself");
         return;
     }
     uint64_t id = identity(name);
@@ -599,6 +603,11 @@ static void add_listener(cfg_context_t *c, cfg_node_t *location, const char *pat
             cfg_fail(c, location, path, SOLARIS_EINVAL, "duplicate enabled listener endpoint");
             return;
         }
+        if (protocol == SOLARIS_LISTENER_DNS && old->listen.family == address.family &&
+            old->listen.port == address.port && (wildcard_listener(&old->listen) || wildcard_listener(&address))) {
+            cfg_fail(c, location, path, SOLARIS_EINVAL, "DNS listener overlaps another listener's wildcard binding");
+            return;
+        }
     }
     solaris_config_listener_t *out = &c->image->listeners[c->image->snapshot.listener_count++];
     *out = (solaris_config_listener_t){.id = id,
@@ -608,7 +617,6 @@ static void add_listener(cfg_context_t *c, cfg_node_t *location, const char *pat
                                        .listen = address,
                                        .auth = auth,
                                        .auth_count = auth_count};
-#endif
 }
 static int endpoint(const char *text, char host[256], uint16_t *port) {
     const char *start = text, *end = NULL, *number = NULL;
@@ -635,10 +643,21 @@ static int endpoint(const char *text, char host[256], uint16_t *port) {
     *port = (uint16_t)parsed;
     return 1;
 }
+void cfg_add_dns_listener(cfg_context_t *c, cfg_node_t *location, const char *text) {
+    char host[256];
+    uint16_t port;
+    if (!endpoint(text, host, &port) || strchr(host, '%') || (*text == '[' && !strchr(host, ':'))) {
+        cfg_fail(c, location, "DNS.listen", SOLARIS_EINVAL,
+                 "DNS listener requires an unscoped numeric IPv4:port or [IPv6]:port in 1..65535");
+        return;
+    }
+    add_listener(c, location, "DNS.listen", "dns", SOLARIS_LISTENER_DNS, host, port, 1, NULL, 0);
+}
 static void listeners_compile(cfg_context_t *c, cfg_node_t *root, cfg_node_t *general) {
     cfg_node_t *listeners = get(root, "Listener");
     size_t extra = listeners ? listeners->count : 0;
-    c->image->listeners = cfg_alloc(&c->image->arena, (extra + 3) * sizeof(*c->image->listeners));
+    size_t capacity = extra + 3 + (get(get(root, "DNS"), "listen") != NULL);
+    c->image->listeners = cfg_alloc(&c->image->arena, capacity * sizeof(*c->image->listeners));
     if (!c->image->listeners) {
         cfg_fail(c, root, "Listener", SOLARIS_ENOMEM, "configuration memory budget exhausted");
         return;

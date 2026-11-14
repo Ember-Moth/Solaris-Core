@@ -115,7 +115,8 @@
       "sources": [
         "src/dns/service/view.c",
         "src/dns/service/service.c",
-        "src/dns/service/lookup.c"
+        "src/dns/service/lookup.c",
+        "src/dns/listener/listener.c"
       ],
       "dependencies": [],
       "requires": [

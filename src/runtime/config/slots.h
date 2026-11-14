@@ -10,16 +10,19 @@ typedef struct solaris_config_slot_key
     /* Zero for fixed ports. Explicit host ephemeral overrides use their
      * logical listener ID, preserving a bound port across compatible reloads. */
     uint64_t ephemeral_id;
+    unsigned paired_udp; /* DNS owns the same numeric endpoint on both transports. */
 } solaris_config_slot_key_t;
 typedef solaris_status_t (*solaris_config_slot_accept_fn)(
     void *context, solaris_config_slot_t *slot, solaris_executor_t *owner, const solaris_address_t *peer,
     const solaris_address_t *local, solaris_stream_t *stream, solaris_stream_callbacks_t *callbacks,
     void **stream_context);
+typedef void (*solaris_config_slot_packet_fn)(void *context, solaris_config_slot_t *slot,
+    solaris_executor_t *owner, const solaris_address_t *peer, const solaris_buffer_t *packet);
 /* The registry owns no published dispatch. The callback acquires the one
  * active publication and resolves this physical slot to an immutable inbound.
  * All prepares are serialized by the transaction coordinator. */
 solaris_status_t solaris_config_slots_create(solaris_budget_t *budget, solaris_config_slot_accept_fn accept,
-                                             void *context, solaris_config_slots_t **out);
+                                             solaris_config_slot_packet_fn packet, void *context, solaris_config_slots_t **out);
 /* Thread-safe owner lookup; does not borrow a slot pointer. */
 solaris_executor_t *solaris_config_slot_owner(solaris_config_slots_t *slots,
                                               const solaris_config_slot_key_t *key,
@@ -37,6 +40,9 @@ void solaris_config_slot_retain(solaris_config_slot_t *slot);
 /* Owner-only. If this is the last reference, retain optional parent through
  * complete physical cleanup. Reused slots release synchronously. */
 void solaris_config_slot_release(solaris_config_slot_t *slot, solaris_scope_t *parent);
+/* Owner-only. Accepted sends retain their packet through one completion. */
+solaris_status_t solaris_config_slot_send(solaris_config_slot_t *slot, const solaris_address_t *peer,
+    const solaris_slice_t *slice, solaris_io_done_fn done, void *user);
 uint64_t solaris_config_slot_id(const solaris_config_slot_t *slot);
 /* Thread-safe. Drained includes rejected-open and last-release cleanup. */
 int solaris_config_slots_drained(solaris_config_slots_t *slots);

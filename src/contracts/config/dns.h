@@ -20,4 +20,7 @@ typedef struct solaris_config_dns {
 /* NULL means neither dns nor hosts was supplied: retain the M2 system path.
  * Borrowed while the caller holds its config reference. */
 const solaris_config_dns_t *solaris_config_dns(const solaris_config_t *config);
+/* A listener dispatches CLIENT_QUERY; other roles may deliberately query it.
+ * Also checked after applying the host's bind override. No interface discovery. */
+int solaris_config_dns_self_upstream(const solaris_config_dns_t *dns, const solaris_address_t *listener);
 #endif

@@ -7,6 +7,7 @@
 #include "runtime/config/control.h"
 #include "contracts/runtime/network.h"
 #include "contracts/config/dns.h"
+#include "dns/listener/listener.h"
 #include "observe/log/service.h"
 #include "runtime/engine/internal.h"
 #include "contracts/inbound/proxy.h"
@@ -39,6 +40,7 @@ struct binding {
     solaris_config_slot_key_t key;
     solaris_config_slot_t *slot;      /* owner-only */
     solaris_proxy_inbound_t *inbound; /* owner-only */
+    solaris_dns_listener_t *dns_listener; /* owner-only */
     uint32_t owner_index;
     uint64_t slot_id, auth_revision;
 };
@@ -244,6 +246,7 @@ struct solaris_config_admission {
     atomic_size_t references;
     bundle_t *bundle;
     solaris_control_view_t *control;
+    solaris_config_slot_t *udp_reply_slot; /* owner-only retained reply endpoint */
     binding_t *binding; /* optional logical/auth identity for TCP-to-UDP admission */
 };
 void solaris_config_admission_retain(solaris_config_admission_t *admission)
@@ -255,12 +258,17 @@ void solaris_config_admission_release(solaris_config_admission_t *admission)
 {
     if (!admission || atomic_fetch_sub_explicit(&admission->references, 1, memory_order_acq_rel) != 1)
         return;
+    if (admission->udp_reply_slot) {
+        /* The last pending reply may outlive the binding's slot reference.
+         * Fence physical close behind the generation that owned this reply. */
+        owner_state_t *owner = &admission->bundle->owners[admission->binding->owner_index];
+        solaris_config_slot_release(admission->udp_reply_slot, &owner->scope);
+    }
     solaris_control_view_release(admission->control);
     bundle_release(admission->bundle);
     solaris_memory_free(admission);
 }
 
-#if SOLARIS_HAS_PROXY_INBOUND
 static void admission_retain(void *context)
 {
     solaris_config_admission_retain(context);
@@ -269,7 +277,6 @@ static void admission_release(void *context)
 {
     solaris_config_admission_release(context);
 }
-#endif
 static solaris_status_t capture_current(solaris_config_manager_t *manager, uint64_t expected,
                                         solaris_config_admission_t **out)
 {
@@ -480,29 +487,68 @@ static solaris_status_t route(void *context, solaris_executor_t *owner, const so
     return SOLARIS_OK;
 }
 #endif
+/* A prepared socket can receive before publication or after retirement.
+ * Resolve its identity through the active publication on every admission. */
+static solaris_status_t capture_slot(solaris_config_manager_t *manager, solaris_config_slot_t *slot,
+                                     solaris_executor_t *owner, solaris_config_admission_t **out)
+{
+    solaris_status_t rc = capture_current(manager, 0, out);
+    if (rc != SOLARIS_OK) return rc;
+    bundle_t *bundle = (*out)->bundle;
+    uint64_t id = solaris_config_slot_id(slot);
+    for (size_t i = 0; i < bundle->binding_count; ++i) {
+        binding_t *binding = &bundle->bindings[i];
+        if (bundle->owners[binding->owner_index].owner == owner && binding->slot_id == id) {
+            (*out)->binding = binding;
+            return SOLARIS_OK;
+        }
+    }
+    solaris_config_admission_release(*out);
+    *out = NULL;
+    return SOLARIS_ECLOSED;
+}
+
+static solaris_status_t send_reply(void *context, const solaris_address_t *peer, const solaris_slice_t *slice,
+                                   solaris_io_done_fn done, void *user)
+{
+    return solaris_config_slot_send(context, peer, slice, done, user);
+}
+
+static void slot_packet(void *context, solaris_config_slot_t *slot, solaris_executor_t *owner,
+                        const solaris_address_t *peer, const solaris_buffer_t *packet)
+{
+    solaris_config_admission_t *admission;
+    if (capture_slot(context, slot, owner, &admission) != SOLARIS_OK) return;
+    if (admission->binding->dns_listener) {
+        solaris_config_slot_retain(slot);
+        admission->udp_reply_slot = slot;
+        const solaris_dns_listener_sender_t sender = {slot, send_reply};
+        const solaris_dns_listener_lease_t lease = {admission, admission_retain, admission_release};
+        (void)solaris_dns_listener_packet(admission->binding->dns_listener, &sender, peer, packet, &lease);
+    }
+    solaris_config_admission_release(admission);
+}
+
 static solaris_status_t slot_accept(void *context, solaris_config_slot_t *slot, solaris_executor_t *owner,
                                     const solaris_address_t *peer, const solaris_address_t *local,
                                     solaris_stream_t *stream, solaris_stream_callbacks_t *callbacks,
                                     void **stream_context)
 {
     solaris_config_admission_t *admission;
-    solaris_status_t rc = capture_current(context, 0, &admission);
-    if (rc != SOLARIS_OK)
+    solaris_status_t rc = capture_slot(context, slot, owner, &admission);
+    if (rc != SOLARIS_OK) return rc;
+    binding_t *binding = admission->binding;
+    if (binding->dns_listener) {
+        const solaris_dns_listener_lease_t lease = {admission, admission_retain, admission_release};
+        rc = solaris_dns_listener_accept(binding->dns_listener, stream, callbacks, stream_context, &lease);
+        solaris_config_admission_release(admission);
         return rc;
-    bundle_t *bundle = admission->bundle;
-    uint64_t id = solaris_config_slot_id(slot);
-    binding_t *binding = NULL;
-    for (size_t i = 0; i < bundle->binding_count; ++i)
-        if (bundle->bindings[i].slot_id == id && bundle->owners[bundle->bindings[i].owner_index].owner == owner) {
-            binding = &bundle->bindings[i];
-            break;
-        }
+    }
 #if SOLARIS_HAS_PROXY_INBOUND
-    admission->binding = binding;
     solaris_proxy_context_t capture = {.context = admission,
                                        .retain = admission_retain,
                                        .release = admission_release,
-                                       .config_revision = bundle->revision,
+                                       .config_revision = admission->bundle->revision,
                                        .selection_revision = admission->control->revision};
     rc = binding && binding->inbound ? solaris_proxy_inbound_accept_with_context(binding->inbound, peer, local, stream,
                                                                                  callbacks, stream_context, &capture)
@@ -555,6 +601,11 @@ static void inbound_closed(void *context, const solaris_proxy_inbound_snapshot_t
     ((binding_t *)context)->inbound = NULL;
 }
 #endif
+static void dns_listener_closed(void *context)
+{
+    ((binding_t *)context)->dns_listener = NULL;
+}
+
 static void worker_closed(void *context)
 {
     ((owner_state_t *)context)->worker = NULL;
@@ -570,6 +621,10 @@ static void owner_detach(owner_state_t *owner, int force)
             solaris_config_slot_t *slot = binding->slot;
             binding->slot = NULL;
             solaris_config_slot_release(slot, owner->scope.cancelled ? NULL : &owner->scope);
+        }
+        if (binding->dns_listener) {
+            if (force) solaris_dns_listener_close(binding->dns_listener);
+            else solaris_dns_listener_retire(binding->dns_listener);
         }
 #if SOLARIS_HAS_PROXY_INBOUND
         if (binding->inbound) {
@@ -609,6 +664,38 @@ static void owner_ready_control(void *context)
     owner_state_t *owner = context;
     owner->ready = 1;
     manager_progress(owner->bundle->manager);
+}
+/* A wildcard socket also receives queries sent to a concrete local interface.
+ * Only consult the OS during prepare, and only if a client upstream shares
+ * the actual port. Offline compilation can check literal addresses alone. */
+static solaris_status_t validate_dns_bind(const solaris_config_dns_t *dns, const solaris_address_t *bound)
+{
+    if (solaris_config_dns_self_upstream(dns, bound)) return SOLARIS_EINVAL;
+    static const uint8_t zero[16] = {0};
+    if (memcmp(bound->ip, zero, bound->family == SOLARIS_ADDRESS_IPV4 ? 4 : 16))
+        return SOLARIS_OK;
+    const size_t role = SOLARIS_DNS_CLIENT_QUERY - 1;
+    size_t candidate = 0;
+    while (candidate < dns->upstream_count[role] && dns->upstreams[role][candidate].address.port != bound->port)
+        ++candidate;
+    if (candidate == dns->upstream_count[role]) return SOLARIS_OK;
+    uv_interface_address_t *interfaces = NULL;
+    int count = 0;
+    int rc = uv_interface_addresses(&interfaces, &count);
+    if (rc < 0) return rc == UV_ENOMEM ? SOLARIS_ENOMEM : SOLARIS_EIO;
+    solaris_status_t status = SOLARIS_OK;
+    for (int i = 0; i < count; ++i) {
+        solaris_address_t local;
+        if (solaris_address_from_sockaddr((const struct sockaddr *)&interfaces[i].address, &local) != SOLARIS_OK ||
+            local.family != bound->family) continue;
+        local.port = bound->port;
+        if (solaris_config_dns_self_upstream(dns, &local)) {
+            status = SOLARIS_EINVAL;
+            break;
+        }
+    }
+    uv_free_interface_addresses(interfaces, count);
+    return status;
 }
 static void owner_prepare(void *context, solaris_status_t status)
 {
@@ -663,6 +750,21 @@ static void owner_prepare(void *context, solaris_status_t status)
         binding->slot_id = solaris_config_slot_id(binding->slot);
         bundle->infos[i].port = bound.port;
         (void)address_text(&bound, bundle->infos[i].address);
+        if (binding->definition->protocol == SOLARIS_LISTENER_DNS) {
+            const solaris_config_t *image = solaris_config_module_set_image(bundle->set);
+            status = validate_dns_bind(solaris_config_dns(image), &bound);
+            if (status != SOLARIS_OK) {
+                solaris_error_set(&owner->error, status, 0, status == SOLARIS_EINVAL
+                                  ? "DNS client query upstream resolves to its own listener"
+                                  : "failed to validate local DNS listener addresses");
+                break;
+            }
+            status = solaris_dns_listener_create(&owner->scope, bundle->dns_binding, &bundle->dns_lookup_view,
+                                                 dns_listener_closed, binding, &binding->dns_listener);
+            if (status != SOLARIS_OK)
+                solaris_error_set(&owner->error, status, 0, "DNS listener preparation failed");
+            continue;
+        }
 #if SOLARIS_HAS_PROXY_INBOUND
         solaris_proxy_inbound_options_t inbound;
         solaris_proxy_inbound_options_init(&inbound);
@@ -1171,6 +1273,7 @@ static void prepare_start_owners(request_t *request)
         binding->bundle = bundle;
         binding->definition = &listeners[i];
         binding->key.address = listeners[i].listen;
+        binding->key.paired_udp = listeners[i].protocol == SOLARIS_LISTENER_DNS;
         (void)solaris_config_get_listener(request->image, i, &bundle->infos[i]);
         for (size_t j = 0; j < request->override_count; ++j)
             if (request->overrides[j].listener_id == listeners[i].id) {
@@ -1533,7 +1636,7 @@ solaris_status_t solaris_config_manager_ensure(solaris_engine_t *engine, solaris
     manager->dns_close = (solaris_deferred_t){.run = dns_close_owner, .context = manager};
     solaris_status_t rc = solaris_publication_create(manager->budget, &manager->publication);
     if (rc == SOLARIS_OK)
-        rc = solaris_config_slots_create(manager->budget, slot_accept, manager, &manager->slots);
+        rc = solaris_config_slots_create(manager->budget, slot_accept, slot_packet, manager, &manager->slots);
     if (rc == SOLARIS_OK)
         rc = solaris_tracker_create(manager->budget, 4096, 256, &manager->tracker);
     if (rc == SOLARIS_OK)

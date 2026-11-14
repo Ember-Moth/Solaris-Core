@@ -26,9 +26,7 @@ typedef struct solaris_config_auth { const char *username, *password; } solaris_
 typedef struct solaris_config_listener {
     uint64_t id;
     const char *name;
-    /* Values equal SOLARIS_INBOUND_HTTP/SOCKS5/MIXED, without depending on the
-     * optional proxy adapter's headers. General listen=off omits its
-     * listener; configured listeners require a nonzero fixed port. */
+    /* SOLARIS_LISTENER_*; DNS uses both TCP and UDP on the same endpoint. */
     uint32_t protocol, udp;
     solaris_address_t listen;
     const solaris_config_auth_t *auth;

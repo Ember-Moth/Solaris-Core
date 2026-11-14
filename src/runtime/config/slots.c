@@ -1,4 +1,5 @@
 #include "runtime/config/slots.h"
+#include "transport/socket/socket.h"
 #include <assert.h>
 #include <string.h>
 #include <uv.h>
@@ -9,6 +10,7 @@ struct solaris_config_slots
     uv_mutex_t mutex;
     solaris_config_slot_t *head;
     solaris_config_slot_accept_fn accept;
+    solaris_config_slot_packet_fn packet;
     void *context;
     uint64_t serial;
     size_t count;
@@ -22,13 +24,14 @@ struct solaris_config_slot
     solaris_config_slot_key_t key;
     solaris_address_t bound;
     solaris_tcp_listener_t *listener;
+    solaris_datagram_t *datagram;
     uint64_t id;
     size_t references;
-    int closing, bound_ready;
+    int closing, bound_ready, abandoned;
 };
 static int key_valid(const solaris_config_slot_key_t *key)
 {
-    return key &&
+    return key && key->paired_udp <= 1u &&
            (key->address.family == SOLARIS_ADDRESS_IPV4 || key->address.family == SOLARIS_ADDRESS_IPV6) &&
            (key->address.port ? key->ephemeral_id == 0 : key->ephemeral_id != 0);
 }
@@ -39,8 +42,8 @@ static int key_equal(const solaris_config_slot_key_t *a, const solaris_config_sl
 static solaris_config_slot_t *find_locked(solaris_config_slots_t *slots, const solaris_config_slot_key_t *key)
 {
     for (solaris_config_slot_t *slot = slots->head; slot; slot = slot->next)
-        if (key_equal(&slot->key, key) ||
-            (key->address.port && slot->bound_ready && solaris_address_equal(&slot->bound, &key->address)))
+        if (!slot->abandoned && (key_equal(&slot->key, key) ||
+            (key->address.port && slot->bound_ready && solaris_address_equal(&slot->bound, &key->address))))
             return slot;
     return NULL;
 }
@@ -58,13 +61,15 @@ static void slot_cancel(void *context)
     uv_mutex_unlock(&slot->registry->mutex);
     if (slot->listener)
         solaris_tcp_listener_close(slot->listener);
+    if (slot->datagram)
+        (void)solaris_datagram_close(slot->datagram);
 }
 static void slot_done(void *context)
 {
     solaris_config_slot_t *slot = context;
     solaris_config_slots_t *slots = slot->registry;
     solaris_scope_t *parent = slot->parent;
-    assert(!slot->listener && !slot->references);
+    assert(!slot->listener && !slot->datagram && !slot->references);
     uv_mutex_lock(&slots->mutex);
     solaris_config_slot_t **link = &slots->head;
     while (*link && *link != slot)
@@ -84,6 +89,30 @@ static void listener_closed(void *context, solaris_status_t status)
     slot->listener = NULL;
     solaris_scope_cancel(&slot->scope);
 }
+static void packet_received(void *context, solaris_datagram_t *datagram, const solaris_address_t *peer,
+                            const solaris_buffer_t *packet)
+{
+    solaris_config_slot_t *slot = context;
+    if (slot->datagram == datagram && !slot->scope.cancelled)
+        slot->registry->packet(slot->registry->context, slot, slot->scope.owner, peer, packet);
+}
+
+static void datagram_closed(void *context, solaris_datagram_t *datagram, solaris_status_t status)
+{
+    solaris_config_slot_t *slot = context;
+    (void)datagram;
+    (void)status;
+    slot->datagram = NULL;
+    solaris_scope_cancel(&slot->scope);
+}
+
+solaris_status_t solaris_config_slot_send(solaris_config_slot_t *slot, const solaris_address_t *peer,
+    const solaris_slice_t *slice, solaris_io_done_fn done, void *user)
+{
+    if (!slot || !slot->datagram || slot->scope.cancelled) return SOLARIS_ECLOSED;
+    return solaris_datagram_send(slot->datagram, peer, slice, done, user);
+}
+
 static solaris_status_t accepted(void *context, const solaris_address_t *peer, const solaris_address_t *local,
                                  solaris_stream_t *stream, solaris_stream_callbacks_t *callbacks,
                                  void **stream_context)
@@ -95,7 +124,7 @@ static solaris_status_t accepted(void *context, const solaris_address_t *peer, c
                                   callbacks, stream_context);
 }
 solaris_status_t solaris_config_slots_create(solaris_budget_t *budget, solaris_config_slot_accept_fn accept,
-                                             void *context, solaris_config_slots_t **out)
+                                             solaris_config_slot_packet_fn packet, void *context, solaris_config_slots_t **out)
 {
     if (!out)
         return SOLARIS_EINVAL;
@@ -113,6 +142,7 @@ solaris_status_t solaris_config_slots_create(solaris_budget_t *budget, solaris_c
     }
     slots->budget = budget;
     slots->accept = accept;
+    slots->packet = packet;
     slots->context = context;
     *out = slots;
     return SOLARIS_OK;
@@ -129,14 +159,15 @@ solaris_executor_t *solaris_config_slot_owner(solaris_config_slots_t *slots,
     uv_mutex_unlock(&slots->mutex);
     return owner;
 }
-solaris_status_t solaris_config_slot_acquire(solaris_config_slots_t *slots, solaris_executor_t *owner,
-                                             solaris_scope_t *parent, const solaris_config_slot_key_t *key,
-                                             solaris_config_slot_t **out, solaris_address_t *bound)
+static solaris_status_t acquire_once(solaris_config_slots_t *slots, solaris_executor_t *owner,
+    solaris_scope_t *parent, const solaris_config_slot_key_t *key, solaris_config_slot_t **out,
+    solaris_address_t *bound, int *retry_pair)
 {
+    *retry_pair = 0;
     if (!out)
         return SOLARIS_EINVAL;
     *out = NULL;
-    if (!slots || !owner || !bound || !key_valid(key))
+    if (!slots || !owner || !bound || !key_valid(key) || (key->paired_udp && !slots->packet))
         return SOLARIS_EINVAL;
     if (!solaris_executor_is_owner(owner))
         return SOLARIS_ETHREAD;
@@ -147,6 +178,7 @@ solaris_status_t solaris_config_slot_acquire(solaris_config_slots_t *slots, sola
     if (slot)
     {
         solaris_status_t status = slot->closing                ? SOLARIS_EAGAIN
+                                  : slot->key.paired_udp != key->paired_udp ? SOLARIS_ENOTSUP
                                   : slot->scope.owner != owner ? SOLARIS_ETHREAD
                                                                : SOLARIS_OK;
         if (status == SOLARIS_OK)
@@ -215,6 +247,23 @@ solaris_status_t solaris_config_slot_acquire(solaris_config_slots_t *slots, sola
         solaris_scope_cancel(&slot->scope);
         return status;
     }
+    if (key->paired_udp) {
+        const solaris_datagram_callbacks_t callbacks = {.on_packet = packet_received, .on_close = datagram_closed};
+        status = solaris_udp_listener_open_scoped(&slot->scope, &actual_bound, &callbacks, slot, &slot->datagram);
+        if (status != SOLARIS_OK) {
+            /* TCP selected an ephemeral port which the OS can reserve for
+             * another UDP socket. Retry with a fresh pair while this scoped
+             * attempt drains; keep all attempts behind the prepare fence. */
+            if (key->address.port == 0 && (status == SOLARIS_EIO || status == SOLARIS_EACCESS)) {
+                uv_mutex_lock(&slots->mutex);
+                slot->abandoned = 1;
+                uv_mutex_unlock(&slots->mutex);
+                *retry_pair = 1;
+            }
+            solaris_scope_cancel(&slot->scope);
+            return status;
+        }
+    }
     slot->references = 1;
     solaris_scope_retain(&slot->scope);
     uv_mutex_lock(&slots->mutex);
@@ -227,6 +276,18 @@ solaris_status_t solaris_config_slot_acquire(solaris_config_slots_t *slots, sola
     *out = slot;
     *bound = slot->bound;
     return SOLARIS_OK;
+}
+solaris_status_t solaris_config_slot_acquire(solaris_config_slots_t *slots, solaris_executor_t *owner,
+    solaris_scope_t *parent, const solaris_config_slot_key_t *key, solaris_config_slot_t **out,
+    solaris_address_t *bound)
+{
+    int retry_pair;
+    solaris_status_t status = SOLARIS_EIO;
+    for (unsigned attempt = 0; attempt < 8; ++attempt) {
+        status = acquire_once(slots, owner, parent, key, out, bound, &retry_pair);
+        if (!retry_pair) break;
+    }
+    return status;
 }
 void solaris_config_slot_retain(solaris_config_slot_t *slot)
 {

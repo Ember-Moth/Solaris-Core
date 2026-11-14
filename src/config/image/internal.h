@@ -64,6 +64,7 @@ void cfg_fail(cfg_context_t *c, const cfg_node_t *node, const char *path, solari
 cfg_node_t *cfg_conf_parse(cfg_context_t *c, const void *bytes, size_t length);
 void cfg_image_compile(cfg_context_t *c, cfg_node_t *root);
 void cfg_dns_compile(cfg_context_t *c, cfg_node_t *root);
+void cfg_add_dns_listener(cfg_context_t *c, cfg_node_t *location, const char *text);
 cfg_node_t *cfg_field(cfg_node_t *map, const char *name);
 int cfg_is_null(const cfg_node_t *node);
 const char *cfg_text(cfg_context_t *c, cfg_node_t *map, const char *key, const char *path, int required, size_t limit,
