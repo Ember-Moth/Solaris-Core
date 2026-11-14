@@ -3,12 +3,18 @@
 import argparse
 import base64
 import json
+import os
+import sys
 from pathlib import Path
 import socket
 import subprocess
 import tempfile
 import threading
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from child_process import run as run_child
+from loopback import tcp_udp_pair, udp_pair
 
 METHODS = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305",
            "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305",
@@ -52,7 +58,7 @@ def identity_credentials(method):
 
 def run_udp(args, ports, log):
     stop = threading.Event()
-    sockets, observations, threads = [], [], []
+    sockets, guards, observations, threads = [], [], [], []
     lock = threading.Lock()
 
     def echo(sock):
@@ -68,12 +74,9 @@ def run_udp(args, ports, log):
             except OSError:
                 break
     try:
-        for family, host in [(socket.AF_INET, "127.0.0.1"), (socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")]:
-            sock = socket.socket(family, socket.SOCK_DGRAM)
-            if family == socket.AF_INET6:
-                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-            sock.bind((host, 0))
-            sock.settimeout(0.1)
+        for family in (socket.AF_INET, socket.AF_INET, socket.AF_INET6):
+            sock, guard = udp_pair(family)
+            guards.append(guard)
             sockets.append(sock)
             thread = threading.Thread(target=echo, args=(sock,), daemon=True)
             thread.start()
@@ -115,16 +118,16 @@ def run_udp(args, ports, log):
                         log.seek(0)
                         raise RuntimeError(f"identity UDP {transport} {method} mode {mode}: {result.stderr}\npeer: {log.read()}")
                 if args.association_client:
-                    result = subprocess.run([args.association_client, "shadowsocks", str(port), password(method), method_name(method),
+                    result = run_child([args.association_client, "shadowsocks", str(port), password(method), method_name(method),
                         *(str(sock.getsockname()[1]) for sock in sockets), "6", "localhost", transport],
-                        capture_output=True, text=True, timeout=15)
+                        capture_output=True, text=True, timeout=15, env={**os.environ, "SOLARIS_TEST_TRACE": "1"})
                     print(transport, method, "association", result.stdout.strip())
                     if result.returncode:
                         log.seek(0)
                         raise RuntimeError(f"association {transport} {method}: {result.stderr}\npeer: {log.read()}")
     finally:
         stop.set()
-        for sock in sockets:
+        for sock in [*sockets, *guards]:
             sock.close()
         for thread in threads:
             thread.join(timeout=1)
@@ -190,11 +193,13 @@ def main():
                 threading.Thread(target=listen, args=(sock,), daemon=True).start()
             # Keep all reservations open until the complete set is allocated.
             reservations = []
+            def reserve_port():
+                tcp, udp, guard = tcp_udp_pair(socket.AF_INET)
+                reservations.extend((tcp, udp))
+                listeners.append(guard)
+                return tcp.getsockname()[1]
             for _ in METHODS:
-                sock = socket.socket()
-                sock.bind(("127.0.0.1", 0))
-                reservations.append(sock)
-                ports.append(sock.getsockname()[1])
+                ports.append(reserve_port())
             inbounds = []
             for method, port in zip(METHODS, ports):
                 inbound = {"type": "shadowsocks", "tag": method, "listen": "127.0.0.1",
@@ -203,10 +208,7 @@ def main():
                     inbound["users"] = [{"name": "primary", "password": key(method, 73)},
                                         {"name": "alternate", "password": key(method, 74)}]
                 if method.endswith(":relay"):
-                    sock = socket.socket()
-                    sock.bind(("127.0.0.1", 0))
-                    reservations.append(sock)
-                    terminal = sock.getsockname()[1]
+                    terminal = reserve_port()
                     inbound["listen_port"] = terminal
                     inbound["tag"] += "-terminal"
                     inbounds.append({"type": "shadowsocks", "tag": method, "listen": "127.0.0.1",

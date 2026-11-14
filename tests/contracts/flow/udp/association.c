@@ -273,10 +273,16 @@ int main(int argc, char **argv)
     oversized.length = 65508u;
     CHECK(solaris_udp_submit(first.dispatcher, &a->key, &first.a, &oversized, &a->reply, sent, &too_large, NULL) == SOLARIS_OK);
     solaris_buffer_release(large); solaris_test_event_wait(&a->sent);
+    /* Keep the entry registered while testing duplicate close. Once its owner
+     * drains the entry, the same ID is stale and correctly returns ECLOSED. */
+    CHECK(solaris_executor_post(a->owner, gate_task, &gates[0]) == SOLARIS_OK);
+    solaris_test_event_wait(&gates[0].entered);
     CHECK(solaris_udp_association_close(first.dispatcher, &a->key, after.id + 100u) == SOLARIS_ECLOSED);
     CHECK(solaris_udp_association_close(first.dispatcher, &a->key, after.id) == SOLARIS_OK);
     CHECK(solaris_udp_association_close(first.dispatcher, &a->key, after.id) == SOLARIS_OK);
+    solaris_test_event_signal(&gates[0].release);
     solaris_test_event_wait(&a->closed);
+    CHECK(solaris_udp_association_close(first.dispatcher, &a->key, after.id) == SOLARIS_ECLOSED);
     CHECK(a->final.sent == 6u && a->final.failed == 2u && a->final.accepted == 8u);
     fixture_stop(&first); fixture_stop(&second);
     for (size_t i = 0; i < 2u; ++i) { solaris_test_event_destroy(&gates[i].entered); solaris_test_event_destroy(&gates[i].release); }
