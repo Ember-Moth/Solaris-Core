@@ -70,8 +70,8 @@ def read_address(sock):
 
 
 class Harness:
-    def __init__(self, binary):
-        self.p = subprocess.Popen([binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    def __init__(self, binary, *args):
+        self.p = subprocess.Popen([binary, *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         self.events = []
         self.queue = queue.Queue()
         threading.Thread(target=self.reader, daemon=True).start()

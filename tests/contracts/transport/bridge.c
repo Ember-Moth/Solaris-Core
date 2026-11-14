@@ -57,7 +57,7 @@ static void data(void *context, solaris_stream_t *stream, const solaris_buffer_t
     if (side->close_data) CHECK(solaris_stream_close(stream) == SOLARIS_OK);
     solaris_test_event_signal(&side->data);
 }
-static void eof(void *context, solaris_stream_t *stream)
+static void stream_eof(void *context, solaris_stream_t *stream)
 {
     endpoint_test_t *side = context;
     CHECK(solaris_executor_is_owner(side->owner) && side->stream == stream && side->eof_count++ == 0u);
@@ -92,7 +92,7 @@ static void done(void *context, solaris_status_t status)
     }
     solaris_test_event_signal(&side->done);
 }
-static const solaris_stream_callbacks_t callbacks = {opened, data, eof, writable, closed};
+static const solaris_stream_callbacks_t callbacks = {opened, data, stream_eof, writable, closed};
 static void attach(void *context, solaris_status_t status)
 {
     endpoint_test_t *side = context; CHECK(status == SOLARIS_OK);

@@ -83,7 +83,7 @@ static void data(void *context, solaris_stream_t *stream, const solaris_buffer_t
         else { CHECK(solaris_stream_shutdown_write(stream, shutdown_done, test) == SOLARIS_ENOTSUP); CHECK(solaris_stream_close(stream) == SOLARIS_OK); }
     }
 }
-static void eof(void *context, solaris_stream_t *stream)
+static void stream_eof(void *context, solaris_stream_t *stream)
 { proxy_case_t *test = context; CHECK(stream == test->stream); test->eof++; }
 static void writable(void *context, solaris_stream_t *stream)
 { proxy_case_t *test = context; CHECK(stream == test->stream); test->writable++; }
@@ -109,7 +109,7 @@ static void closed(void *context, solaris_stream_t *stream, solaris_status_t sta
     if (test->instance != NULL) { CHECK(solaris_module_retire(test->instance) == SOLARIS_OK); test->instance = NULL; }
     solaris_test_event_signal(&test->done);
 }
-static const solaris_stream_callbacks_t callbacks = {opened, data, eof, writable, closed};
+static const solaris_stream_callbacks_t callbacks = {opened, data, stream_eof, writable, closed};
 #if SOLARIS_HAS_TLS
 static void carrier_opened(void *context, solaris_stream_t *stream, solaris_status_t status)
 { proxy_case_t *test = context; test->carrier_callbacks.on_open(test->carrier_context, stream, status); }

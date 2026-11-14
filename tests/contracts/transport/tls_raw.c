@@ -85,7 +85,7 @@ static void data(void *context, solaris_stream_t *stream, const solaris_buffer_t
     }
     f->received += count; finish_if_ready(f);
 }
-static void eof(void *context, solaris_stream_t *stream)
+static void stream_eof(void *context, solaris_stream_t *stream)
 { fixture_t *f = context; CHECK(stream == f->stream && ++f->eof == 1u && f->received == PREFIX + REMAINING + DOWNLOAD); }
 static void closed(void *context, solaris_stream_t *stream, solaris_status_t status)
 {
@@ -98,7 +98,7 @@ static void closed(void *context, solaris_stream_t *stream, solaris_status_t sta
     else CHECK(stats.bytes_written == 0u && stats.bytes_read == 0u && f->shutdown == 0u && f->eof == 0u);
     solaris_test_event_signal(&f->done);
 }
-static const solaris_stream_callbacks_t callbacks = {opened, data, eof, NULL, closed};
+static const solaris_stream_callbacks_t callbacks = {opened, data, stream_eof, NULL, closed};
 static void start(void *context, solaris_status_t status)
 {
     fixture_t *f = context; CHECK(status == SOLARIS_OK);

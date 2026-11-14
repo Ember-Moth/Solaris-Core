@@ -44,7 +44,7 @@ static int integer_value(const cfg_node_t *n, int64_t *out) {
     uint64_t value = 0;
     for (size_t i = 0; i < n->length; ++i) {
         unsigned ch = (unsigned char)n->scalar[i];
-        if (ch < '0' || ch > '9' || value > (INT64_MAX - (ch - '0')) / 10u)
+        if (ch < '0' || ch > '9' || value > ((uint64_t)INT64_MAX - (ch - '0')) / 10u)
             return 0;
         value = value * 10u + ch - '0';
     }

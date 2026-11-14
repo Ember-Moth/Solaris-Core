@@ -91,7 +91,8 @@ static void aliases_and_copy(fixture_t *f)
     memset(ips[2].ip, 0, 16); ips[2].ip[10] = ips[2].ip[11] = 255;
     ips[2].ip[12] = 192; ips[2].ip[14] = 2; ips[2].ip[15] = 8;
     char *name = malloc(32), *alias = malloc(32); CHECK(name && alias);
-    strcpy(name, "HEAD.EXAMPLE."); strcpy(alias, "middle.example");
+    memcpy(name, "HEAD.EXAMPLE.", sizeof("HEAD.EXAMPLE."));
+    memcpy(alias, "middle.example", sizeof("middle.example"));
     solaris_address_t sysip = address(4, 99);
     solaris_hosts_entry_t config[] = {
         {name, SOLARIS_HOSTS_ALIAS, NULL, 0, alias},

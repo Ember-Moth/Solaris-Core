@@ -40,7 +40,11 @@ static void *allocate(void *context, size_t size)
 static void deallocate(void *context, void *pointer)
 { environment_t *env = context; atomic_fetch_add(&env->deallocations, 1); free(pointer); }
 static uint64_t now(void *context)
-{ return uv_hrtime() + atomic_load(&((environment_t *)context)->clock_offset); }
+{
+    environment_t *env = context;
+    uint64_t offset = atomic_load(&env->clock_offset);
+    return !strcmp(env->mode, "fallback_timeout") ? offset : uv_hrtime() + offset;
+}
 static int socket_closed(environment_t *env)
 {
     if (!env->policy_calls) return 1;
@@ -58,6 +62,9 @@ static solaris_status_t protect_socket(void *context, uintptr_t handle, uint32_t
     environment_t *env = context; CHECK(family == env->options.upstream.family);
     ++env->policy_calls; env->last_handle = handle;
     if (kind == SOLARIS_SOCKET_TCP) ++env->tcp_policy; else { CHECK(kind == SOLARIS_SOCKET_UDP); ++env->udp_policy; }
+    /* Consume 60% of a single deadline on each real transport attempt. */
+    if (!strcmp(env->mode, "fallback_timeout"))
+        atomic_fetch_add(&env->clock_offset, env->timeout_ms * UINT64_C(600000));
     if (!strcmp(env->mode, "deny")) return SOLARIS_EACCESS;
     if (!strcmp(env->mode, "deny_deadline") || !strcmp(env->mode, "network_deadline"))
         atomic_fetch_add(&env->clock_offset, (env->timeout_ms + 1) * UINT64_C(1000000));
@@ -171,7 +178,13 @@ int main(int argc, char **argv)
 #if SOLARIS_HAS_TLS
     if (env.options.transport == SOLARIS_DNS_TRANSPORT_TLS) {
         CHECK(argc == 7);
-        FILE *file = fopen(argv[6], "rb"); CHECK(file);
+        FILE *file = NULL;
+#ifdef _MSC_VER
+        CHECK(fopen_s(&file, argv[6], "rb") == 0);
+#else
+        file = fopen(argv[6], "rb");
+#endif
+        CHECK(file);
         char *pem = malloc(262145); CHECK(pem);
         size_t size = fread(pem, 1, 262145, file); CHECK(!ferror(file) && feof(file) && size && size <= 262144); fclose(file);
         CHECK(solaris_tls_context_create(env.budget, pem, size, &env.trust) == SOLARIS_OK);

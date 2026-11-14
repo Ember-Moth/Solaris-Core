@@ -272,7 +272,8 @@ size_t solaris_dns_wire_udp_limit(const solaris_dns_wire_t *query, size_t servic
 solaris_status_t solaris_dns_wire_parse_frame(solaris_budget_t *budget, const void *bytes, size_t length,
     const solaris_dns_wire_limits_t *limits, size_t *consumed, solaris_dns_wire_t **out, solaris_error_t *error)
 {
-    if (consumed) *consumed = 0; if (out) *out = NULL;
+    if (consumed) *consumed = 0;
+    if (out) *out = NULL;
     dns_error(error, SOLARIS_OK, 0, "");
     solaris_dns_wire_limits_t selected;
     if (!consumed || !out || !budget || (!bytes && length) || dns_limits(limits, &selected) != SOLARIS_OK)

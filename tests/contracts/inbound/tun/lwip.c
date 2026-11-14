@@ -49,7 +49,7 @@ static void data(void *context, solaris_stream_t *stream, const solaris_buffer_t
     put32(bytes, connection->id); memcpy(bytes + 4u, solaris_buffer_data(buffer), length);
     event(connection->test, 'D', bytes, (uint32_t)(length + 4u)); free(bytes);
 }
-static void eof(void *context, solaris_stream_t *stream)
+static void stream_eof(void *context, solaris_stream_t *stream)
 { connection_t *connection = context; CHECK(connection->stream == stream); status_event(connection->test, 'E', connection->id, SOLARIS_OK); }
 static void closed(void *context, solaris_stream_t *stream, solaris_status_t status)
 {
@@ -77,7 +77,7 @@ static solaris_status_t accept_connection(void *context, const solaris_address_t
     connection_t *connection = &test->connections[test->next_id];
     connection->test = test; connection->id = test->next_id++;
     CHECK(source->port != 0u && destination->port != 0u);
-    *callbacks = (solaris_stream_callbacks_t){.on_open = opened, .on_data = data, .on_eof = eof, .on_close = closed};
+    *callbacks = (solaris_stream_callbacks_t){.on_open = opened, .on_data = data, .on_eof = stream_eof, .on_close = closed};
     *stream_context = connection; return SOLARIS_OK;
 }
 static void stack_closed(void *context, solaris_status_t status)

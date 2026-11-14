@@ -174,7 +174,7 @@ static void data(void *context, solaris_stream_t *stream, const solaris_buffer_t
         }
     }
 }
-static void eof(void *context, solaris_stream_t *stream) { environment_t *env = context; CHECK(stream == env->stream); env->eof++; }
+static void stream_eof(void *context, solaris_stream_t *stream) { environment_t *env = context; CHECK(stream == env->stream); env->eof++; }
 static void writable(void *context, solaris_stream_t *stream) { environment_t *env = context; CHECK(stream == env->stream); env->writable++; }
 static void closed(void *context, solaris_stream_t *stream, solaris_status_t status)
 {
@@ -183,7 +183,7 @@ static void closed(void *context, solaris_stream_t *stream, solaris_status_t sta
     CHECK(solaris_stream_get_snapshot(stream, &stats) == SOLARIS_OK && stats.pending_bytes == 0u && stats.pending_requests == 0u);
     solaris_test_event_signal(&env->complete);
 }
-static const solaris_stream_callbacks_t callbacks = {opened, data, eof, writable, closed};
+static const solaris_stream_callbacks_t callbacks = {opened, data, stream_eof, writable, closed};
 static void start(void *context, solaris_status_t status)
 {
     environment_t *env = context; CHECK(status == SOLARIS_OK);

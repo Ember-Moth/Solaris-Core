@@ -7,7 +7,10 @@ import select
 import socket
 import struct
 import subprocess
+import sys
 import threading
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from loopback import tcp_udp_pair
 
 
 def question_end(query):
@@ -55,12 +58,9 @@ class Peer:
         self.fence_requested, self.fence_done = threading.Event(), threading.Event()
         self.errors, self.clients = [], []
         self.udp_queries = self.tcp_queries = self.tcp_connections = 0
-        self.tcp = socket.socket(family, socket.SOCK_STREAM)
-        self.tcp.bind((self.host, 0))
+        self.tcp, self.udp, self.guard = tcp_udp_pair(family)
         self.port = self.tcp.getsockname()[1]
         self.tcp.listen(8)
-        self.udp = socket.socket(family, socket.SOCK_DGRAM)
-        self.udp.bind((self.host, self.port))
         self.thread = threading.Thread(target=self.run, daemon=True)
 
     def run(self):
@@ -74,8 +74,6 @@ class Peer:
                     self.udp_queries += 1
                     if self.mode in ('timeout', 'cancel', 'stop'):
                         continue
-                    if self.mode == 'fallback_timeout':
-                        self.stop.wait(0.18)
                     if self.mode == 'wrong':
                         with socket.socket(self.family, socket.SOCK_DGRAM) as alternate:
                             alternate.bind((self.host, 0))
@@ -118,8 +116,6 @@ class Peer:
                 if self.mode in ('timeout', 'cancel', 'stop'):
                     self.stop.wait(1)
                     return
-                if self.mode == 'fallback_timeout':
-                    self.stop.wait(0.12)
                 if self.mode == 'malformed':
                     connection.sendall(b'\0\x08')
                     return
@@ -153,7 +149,7 @@ class Peer:
         self.thread.join(3)
         for thread in self.clients:
             thread.join(3)
-        self.tcp.close(); self.udp.close()
+        self.tcp.close(); self.udp.close(); self.guard.close()
         assert not self.thread.is_alive() and not any(t.is_alive() for t in self.clients)
 
 
@@ -185,7 +181,9 @@ def run(binary, family, transport, mode, expected, timeout=1000):
             assert result['fallback'] == 1 and result['udp'] == 1 and result['tcp'] == 1, result
             assert peer.udp_queries == 1 and peer.tcp_queries == 1
         if mode == 'fallback_timeout':
-            assert result['fallback'] == 1 and result['duration_ns'] >= timeout * 1_000_000, result
+            assert result['fallback'] == result['udp'] == result['tcp'] == 1, result
+            assert result['duration_ns'] == timeout * 1_200_000, result
+            assert peer.udp_queries == 1 and peer.tcp_connections == 0
     assert not peer.errors, (mode, peer.errors)
     return result
 

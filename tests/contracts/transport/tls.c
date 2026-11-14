@@ -69,7 +69,7 @@ static void data(void *context, solaris_stream_t *stream, const solaris_buffer_t
     if (test->received == PAYLOAD_BYTES)
         CHECK(solaris_stream_shutdown_write(stream, shutdown_done, test) == SOLARIS_OK);
 }
-static void eof(void *context, solaris_stream_t *stream)
+static void stream_eof(void *context, solaris_stream_t *stream)
 { tls_case_t *test = context; CHECK(stream == test->stream); test->eof++; }
 static void writable(void *context, solaris_stream_t *stream)
 { tls_case_t *test = context; CHECK(stream == test->stream); test->writable++; }
@@ -87,7 +87,7 @@ static void closed(void *context, solaris_stream_t *stream, solaris_status_t sta
     }
     solaris_test_event_signal(&test->done);
 }
-static const solaris_stream_callbacks_t callbacks = {opened, data, eof, writable, closed};
+static const solaris_stream_callbacks_t callbacks = {opened, data, stream_eof, writable, closed};
 static solaris_status_t policy(void *context, uintptr_t socket, uint32_t family, uint32_t kind)
 {
     (void)socket; (void)family;

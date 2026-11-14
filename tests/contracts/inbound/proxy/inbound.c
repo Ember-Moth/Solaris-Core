@@ -24,6 +24,7 @@ typedef struct fixture {
     solaris_test_event_t ready;
     unsigned mode;
     atomic_int fail_after;
+    atomic_uint_fast64_t clock_ns;
 } fixture_t;
 typedef struct command {
     fixture_t *test;
@@ -31,6 +32,10 @@ typedef struct command {
     uint8_t *data;
     uint32_t length;
 } command_t;
+static uint64_t manual_clock(void *context)
+{
+    return atomic_load(&((fixture_t *)context)->clock_ns);
+}
 static uint32_t get32(const uint8_t *p)
 {
     return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
@@ -197,6 +202,9 @@ static void execute(void *context, solaris_status_t status)
     } else if (c->type == 'M') {
         CHECK(c->length == 4);
         atomic_store(&f->fail_after, (int32_t)get32(c->data));
+    } else if (c->type == 'K') {
+        CHECK(c->length == 4);
+        atomic_fetch_add(&f->clock_ns, (uint64_t)get32(c->data) * UINT64_C(1000000));
     } else if (c->type == 'Q') {
         solaris_proxy_inbound_snapshot_t s;
         CHECK(solaris_proxy_inbound_snapshot(f->inbound, &s) == SOLARIS_OK);
@@ -229,15 +237,18 @@ static void create_module(void *context, solaris_status_t status)
     solaris_registry_destroy(registry);
     solaris_test_event_signal(&f->ready);
 }
-int main(void)
+int main(int argc, char **argv)
 {
     fixture_t f = {0};
     atomic_init(&f.fail_after, -1);
+    atomic_init(&f.clock_ns, UINT64_C(1000000000));
     CHECK(!uv_mutex_init(&f.output) && !solaris_test_event_init(&f.ready, 0));
     solaris_runtime_services_t services;
     solaris_runtime_services_init(&services);
     services.context = &f;
     services.allocate = allocate;
+    if (argc == 2 && !strcmp(argv[1], "--manual-clock")) services.now_ns = manual_clock;
+    else CHECK(argc == 1);
     solaris_engine_options_t options;
     solaris_engine_options_init(&options);
     options.io_workers = 1;

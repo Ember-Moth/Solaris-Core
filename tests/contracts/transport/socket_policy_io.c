@@ -76,7 +76,7 @@ typedef struct environment {
     atomic_int fail_next;
     solaris_status_t submitted, open_status, close_status, resolve_status;
     uint32_t family, kind;
-    int mode, peer, retry_guard, reused_fd, original, duplicate, host_calls, sync_calls, resolve_pending;
+    int mode, peer, reused_fd, original, duplicate, host_calls, sync_calls, resolve_pending;
     size_t received;
 } environment_t;
 static void *allocate(void *context, size_t size)
@@ -248,10 +248,13 @@ static void setup_peer(environment_t *env)
     CHECK(solaris_address_from_sockaddr((struct sockaddr *)&address, &env->target) == SOLARIS_OK);
     if (env->kind == SOLARIS_SOCKET_TCP) CHECK(listen(env->peer, 2) == 0);
     if (env->mode == RETRY) {
-        env->retry_guard = socket(AF_INET6, SOCK_STREAM, 0); CHECK(env->retry_guard >= 0);
+        int probe = socket(AF_INET6, SOCK_STREAM, 0); CHECK(probe >= 0);
         solaris_address_t rejected; CHECK(solaris_address_parse("::1", env->target.port, &rejected) == SOLARIS_OK);
         socket_address(&rejected, &address, &length);
-        CHECK(bind(env->retry_guard, (struct sockaddr *)&address, length) == 0); /* Reserved, deliberately not listening. */
+        CHECK(bind(probe, (struct sockaddr *)&address, length) == 0);
+        /* Darwin may drop SYNs to a bound, non-listening socket. A closed
+         * loopback port returns the refusal that drives the second attempt. */
+        CHECK(close(probe) == 0);
     }
 }
 static void reuse_closed_original(environment_t *env)
@@ -270,7 +273,7 @@ static void run(uint32_t family, uint32_t kind, int mode)
 {
     fprintf(stderr, "socket policy I/O: family=%u kind=%u mode=%d\n", family, kind, mode);
     environment_t env; memset(&env, 0, sizeof(env)); env.family = family; env.kind = kind; env.mode = mode;
-    env.reused_fd = env.retry_guard = -1;
+    env.reused_fd = -1;
     atomic_init(&env.refs, 1u); atomic_init(&env.retains, 0u); atomic_init(&env.releases, 0u); atomic_init(&env.opens, 0u);
     atomic_init(&env.closes, 0u); atomic_init(&env.sent, 0u); atomic_init(&env.packets, 0u); atomic_init(&env.parents, 0u);
     atomic_init(&env.acknowledged, 0u); atomic_init(&env.clock, 0u); atomic_init(&env.fail_next, 0);
@@ -335,7 +338,6 @@ static void run(uint32_t family, uint32_t kind, int mode)
     CHECK(solaris_executor_quiesce(env.owner) == SOLARIS_OK && solaris_executor_destroy(env.owner) == SOLARIS_OK);
     if (env.reused_fd >= 0) { CHECK(fcntl(env.reused_fd, F_GETFD) >= 0); close(env.reused_fd); }
     close(env.peer);
-    if (env.retry_guard >= 0) close(env.retry_guard);
     CHECK(solaris_budget_used(env.budget) == 0u); solaris_budget_release(env.budget);
     solaris_test_event_destroy(&env.ready); solaris_test_event_destroy(&env.host_ready); solaris_test_event_destroy(&env.opened);
     solaris_test_event_destroy(&env.closed); solaris_test_event_destroy(&env.cancelled); solaris_test_event_destroy(&env.action);
