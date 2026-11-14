@@ -48,7 +48,8 @@ struct environment {
     solaris_deferred_t cancel;
     listener_fixture_t listeners[2];
     atomic_uint_fast64_t clock;
-    atomic_uint spoof_port;
+    atomic_uint presented_port;
+    atomic_int spoof_ip;
 
     unsigned int accepted, opens, child_closes, closes, writes, shutdowns, reads, eofs, emitted;
     size_t read_bytes;
@@ -169,12 +170,9 @@ static solaris_status_t accept_connection(void *context, const solaris_address_t
 static solaris_status_t fixture_accept(void *context, const solaris_address_t *peer, const solaris_address_t *local,
     solaris_stream_t *stream, solaris_stream_callbacks_t *callbacks, void **stream_context)
 {
-    listener_fixture_t *fixture = context; solaris_address_t mapped = fixture->peer; mapped.port = peer->port;
-    unsigned int spoof_port = atomic_load(&fixture->env->spoof_port);
-    if (spoof_port) {
-        mapped = *peer;
-        mapped.port = (uint16_t)spoof_port;
-    }
+    listener_fixture_t *fixture = context;
+    solaris_address_t mapped = atomic_load(&fixture->env->spoof_ip) ? *peer : fixture->peer;
+    mapped.port = (uint16_t)atomic_load(&fixture->env->presented_port);
     return fixture->accept(fixture->context, &mapped, local, stream, callbacks, stream_context);
 }
 static void fixture_closed(void *context, solaris_status_t status)
@@ -302,18 +300,19 @@ static void unverified_reset(void *context, solaris_status_t status)
 static test_socket_t connect_client(environment_t *env, uint16_t port)
 {
     int family = env->family == 4 ? AF_INET : AF_INET6; test_socket_t fd = socket(family, SOCK_STREAM, 0); CHECK(fd != TEST_INVALID_SOCKET);
-    int yes = 1; CHECK(setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&yes, sizeof(yes)) == 0);
 #ifdef _WIN32
     DWORD timeout = 2000u;
 #else
     struct timeval timeout = {2, 0};
 #endif
     CHECK(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout)) == 0);
-    solaris_address_t source; CHECK(solaris_address_parse(env->family == 4 ? "127.0.0.1" : "::1", port, &source) == SOLARIS_OK);
-    struct sockaddr_storage local, peer;
-    CHECK(solaris_address_to_sockaddr(&source, &local) == SOLARIS_OK && solaris_address_to_sockaddr(&env->mapped_destination, &peer) == SOLARIS_OK);
+    /* The NAT peer port belongs to the synthetic packet namespace. Let the
+     * kernel choose an available source port for the real transport and
+     * present the tested port to the injected accept hook. */
+    atomic_store(&env->presented_port, port);
+    struct sockaddr_storage peer;
+    CHECK(solaris_address_to_sockaddr(&env->mapped_destination, &peer) == SOLARIS_OK);
     int length = family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
-    CHECK(bind(fd, (const struct sockaddr *)&local, length) == 0);
     int rc = connect(fd, (const struct sockaddr *)&peer, length);
     if (rc != 0) {
 #ifdef _WIN32
@@ -333,7 +332,7 @@ static void reject_client(environment_t *env, uint16_t port)
 }
 static void run(int mode, int family, int failure)
 {
-    environment_t env = {.mode = mode, .family = family}; atomic_init(&env.clock, 0u); atomic_init(&env.spoof_port, 0u);
+    environment_t env = {.mode = mode, .family = family}; atomic_init(&env.clock, 0u); atomic_init(&env.presented_port, 0u); atomic_init(&env.spoof_ip, 0);
     CHECK(solaris_test_event_init(&env.ready, 0u) == 0 && solaris_test_event_init(&env.step, 0u) == 0 &&
         solaris_test_event_init(&env.opened, 0u) == 0 && solaris_test_event_init(&env.child_done, 0u) == 0 && solaris_test_event_init(&env.complete, 0u) == 0);
     solaris_runtime_services_t services; solaris_runtime_services_init(&services);
@@ -346,12 +345,9 @@ static void run(int mode, int family, int failure)
     if (mode == NATIVE_REJECT) {
         reject_client(&env, env.mapped_source.port); CHECK(solaris_executor_post(env.owner, stop, &env) == SOLARIS_OK);
     } else if (mode != ALLOCATE) {
-        /* Present the correct NAT port and a wrong IP to the accept hook.
-         * Use a different OS source port so the subsequent valid connection
-         * does not reuse the rejected connection's TCP four-tuple. */
-        atomic_store(&env.spoof_port, env.mapped_source.port);
-        reject_client(&env, (uint16_t)(env.mapped_source.port + 11u));
-        atomic_store(&env.spoof_port, 0u);
+        atomic_store(&env.spoof_ip, 1);
+        reject_client(&env, env.mapped_source.port);
+        atomic_store(&env.spoof_ip, 0);
         reject_client(&env, (uint16_t)(env.mapped_source.port + 10u));
         if (mode == IDLE) {
             atomic_store(&env.clock, UINT64_C(2000000000)); solaris_executor_wake(env.owner);
