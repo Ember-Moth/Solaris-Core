@@ -3,6 +3,12 @@ import errno
 import socket
 
 
+def unavailable_port(error):
+    # Winsock also returns WSAEACCES for exclusive/excluded ports when a
+    # candidate allocated for one transport is bound by another.
+    return error.errno == errno.EADDRINUSE or getattr(error, "winerror", None) == 10013
+
+
 def udp_pair(family):
     """Return (echo socket, other-family reservation), both bound to loopback.
 
@@ -27,7 +33,7 @@ def udp_pair(family):
             return primary, guard
         except OSError as error:
             primary.close(); guard.close()
-            if error.errno != errno.EADDRINUSE:
+            if not unavailable_port(error):
                 raise
     raise OSError(errno.EADDRINUSE, "could not reserve a loopback UDP port in both families")
 
@@ -45,6 +51,6 @@ def tcp_udp_pair(family):
             return tcp, udp, guard
         except OSError as error:
             tcp.close(); udp.close(); guard.close()
-            if error.errno != errno.EADDRINUSE:
+            if not unavailable_port(error):
                 raise
     raise OSError(errno.EADDRINUSE, "could not reserve matching loopback TCP/UDP ports")
