@@ -21,6 +21,7 @@ typedef struct worker {
     solaris_test_event_t ready, done;
     const char *good_url, *bad_url;
     solaris_status_t expected_failure;
+    int peer_may_disconnect;
     unsigned int phase;
     size_t bytes_read, bytes_written;
 } worker_t;
@@ -30,6 +31,8 @@ static void completed(void *context, solaris_http_probe_t *probe, const solaris_
     worker_t *worker = context; CHECK(probe == worker->probe && solaris_executor_is_owner(worker->owner));
     CHECK(result->node_id == (worker->phase == 0u ? 1u : 2u) && result->selection_revision == (worker->phase == 0u ? 1u : 2u));
     solaris_status_t expected = worker->expected_failure != SOLARIS_OK ? worker->expected_failure : worker->phase == 2u ? SOLARIS_EIO : SOLARIS_OK;
+    if (worker->peer_may_disconnect && result->status == SOLARIS_EIO)
+        expected = SOLARIS_EIO;
     if (result->status != expected) fprintf(stderr, "probe phase=%u status=%d http=%u expected=%d\n", worker->phase, result->status, result->http_status, expected);
     CHECK(result->status == expected && result->connection_id != 0u && result->completed_ns >= result->started_ns);
     if (worker->expected_failure == SOLARIS_OK) CHECK(result->http_status == (worker->phase == 2u ? 503u : 204u) && result->bytes_written != 0u && result->bytes_read != 0u);
@@ -107,7 +110,8 @@ int main(int argc, char **argv)
     worker_t workers[2] = {{0}};
     for (size_t i = 0u; i < 2u; ++i) {
         worker_t *worker = &workers[i]; worker->config = config; worker->control = control; worker->tracker = tracker; worker->replay = replay;
-        worker->trust = trust; worker->good_url = argv[7]; worker->bad_url = argv[8]; worker->expected_failure = (solaris_status_t)atoi(argv[9]);
+        worker->trust = trust; worker->good_url = argv[7]; worker->bad_url = argv[8]; worker->peer_may_disconnect = !strcmp(argv[9], "auth-denial-or-disconnect");
+        worker->expected_failure = worker->peer_may_disconnect ? SOLARIS_EACCESS : (solaris_status_t)atoi(argv[9]);
         CHECK(solaris_traffic_counter_create(budget, &worker->traffic) == SOLARIS_OK);
         CHECK(solaris_test_event_init(&worker->ready, 0u) == 0 && solaris_test_event_init(&worker->done, 0u) == 0);
         solaris_executor_options_t options = {.id = (uint32_t)i, .queue_capacity = 8u, .resource_limit = 256u, .budget = budget};
@@ -126,7 +130,7 @@ int main(int argc, char **argv)
     }
     solaris_select_member_snapshot_t one, two;
     CHECK(solaris_select_member_snapshot(control, 0u, &one) == SOLARIS_OK && solaris_select_member_snapshot(control, 1u, &two) == SOLARIS_OK);
-    CHECK(!one.checking && !two.checking && one.health == (uint32_t)(atoi(argv[9]) == 0 ? SOLARIS_HEALTH_PASS : SOLARIS_HEALTH_FAIL) && two.health == SOLARIS_HEALTH_FAIL);
+    CHECK(!one.checking && !two.checking && one.health == (uint32_t)(workers[0].expected_failure == SOLARIS_OK ? SOLARIS_HEALTH_PASS : SOLARIS_HEALTH_FAIL) && two.health == SOLARIS_HEALTH_FAIL);
     solaris_tracker_totals_t users, probes; CHECK(solaris_tracker_totals(tracker, SOLARIS_FLOW_USER, &users) == SOLARIS_OK && users.created == 0u);
     CHECK(solaris_tracker_totals(tracker, SOLARIS_FLOW_PROBE, &probes) == SOLARIS_OK && probes.created == 6u && probes.closed == 6u && probes.active == 0u);
     solaris_connection_snapshot_t entries[16]; size_t needed;

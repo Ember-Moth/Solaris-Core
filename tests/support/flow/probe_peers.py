@@ -19,6 +19,8 @@ UUID = "7b4bb031-41b5-4d1d-b062-1ea0cab957c1"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from child_process import run as run_child
 from loopback import tcp_udp_pair
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "inbound/proxy"))
+from inbound import exact
 
 def main():
     parser = argparse.ArgumentParser()
@@ -168,7 +170,44 @@ def main():
                 for (kind, credential, cipher, outer_tls), inbound in zip(cases, inbounds):
                     run(kind, inbound["listen_port"], credential, cipher, cert if outer_tls else "-", tls=True)
                     if kind == "socks5" and cipher != "-":
-                        run(kind, inbound["listen_port"], "wrong", cipher, failure=-13)
+                        # An independent client records whether this peer sent the
+                        # denial bytes or closed before a complete reply arrived.
+                        with socket.create_connection(("127.0.0.1", inbound["listen_port"]), timeout=3) as control:
+                            control.sendall(b"\x05\x01\x02")
+                            assert exact(control, 2) == b"\x05\x02"
+                            control.sendall(b"\x01\x07solaris\x05wrong")
+                            try:
+                                reply = exact(control, 2)
+                            except (EOFError, ConnectionResetError, ConnectionAbortedError):
+                                reply = None
+                            assert reply is None or (reply[0] == 1 and reply[1] != 0), reply
+                            print("SOCKS5 negative control:", "disconnect" if reply is None else "explicit denial", flush=True)
+                        run(kind, inbound["listen_port"], "wrong", cipher, failure="auth-denial-or-disconnect")
+                        # Verify each exact error on a peer that controls the wire
+                        # boundary for all six probes, including both workers.
+                        for reply_bytes, status in [(b"\x01\x01", -13), (b"\x01", -8)]:
+                            with socket.socket() as listener:
+                                listener.bind(("127.0.0.1", 0)); listener.listen(8)
+                                listener.settimeout(5)
+                                errors = []
+                                def deny():
+                                    try:
+                                        for _ in range(6):
+                                            peer_sock, _ = listener.accept()
+                                            with peer_sock:
+                                                peer_sock.settimeout(3)
+                                                assert exact(peer_sock, 3) == b"\x05\x01\x02"
+                                                peer_sock.sendall(b"\x05\x02")
+                                                assert exact(peer_sock, 15) == b"\x01\x07solaris\x05wrong"
+                                                peer_sock.sendall(reply_bytes)
+                                                peer_sock.shutdown(socket.SHUT_WR)
+                                                assert not peer_sock.recv(1)
+                                    except Exception as exc:
+                                        errors.append(exc)
+                                thread = threading.Thread(target=deny, daemon=True); thread.start()
+                                run(kind, listener.getsockname()[1], "wrong", cipher, failure=status)
+                                thread.join(5)
+                                assert not thread.is_alive() and not errors, errors
             if "vless" in args.types:
                 version = subprocess.check_output([args.xray, "version"], text=True).splitlines()[0]
                 if args.xray_version.removeprefix("v") not in version:
