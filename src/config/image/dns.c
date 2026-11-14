@@ -159,6 +159,7 @@ void cfg_dns_compile(cfg_context_t *c, cfg_node_t *root) {
                                 "use-hosts",
                                 "use-system-hosts",
                                 "upstream",
+                                "route-upstream",
                                 "bootstrap-upstream",
                                 "proxy-upstream",
                                 "direct-upstream",
@@ -192,6 +193,8 @@ void cfg_dns_compile(cfg_context_t *c, cfg_node_t *root) {
                      "DNS cache currently uses the bounded 4096-entry service default");
         upstreams(c, map, "upstream", &dns->upstreams[SOLARIS_DNS_CLIENT_QUERY - 1],
                   &dns->upstream_count[SOLARIS_DNS_CLIENT_QUERY - 1]);
+        upstreams(c, map, "route-upstream", &dns->upstreams[SOLARIS_DNS_ROUTE_TARGET - 1],
+                  &dns->upstream_count[SOLARIS_DNS_ROUTE_TARGET - 1]);
         upstreams(c, map, "direct-upstream", &dns->upstreams[SOLARIS_DNS_DIRECT_TARGET - 1],
                   &dns->upstream_count[SOLARIS_DNS_DIRECT_TARGET - 1]);
         upstreams(c, map, "proxy-upstream", &dns->upstreams[SOLARIS_DNS_PROXY_SERVER - 1],

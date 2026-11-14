@@ -413,6 +413,14 @@ if(SOLARIS_BUILD_TESTS AND BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
                         "${PROJECT_SOURCE_DIR}/examples/config_host.conf"
                         "${PROJECT_SOURCE_DIR}/examples/config_host_reload.conf")
                     set_tests_properties(config_host_contract PROPERTIES TIMEOUT 90)
+                    set(dns_roles_args)
+                    if(SOLARIS_ENABLE_SOCKS5)
+                        list(APPEND dns_roles_args --socks5-outbound)
+                    endif()
+                    add_test(NAME config_dns_roles_contract COMMAND "${Python3_EXECUTABLE}"
+                        "${PROJECT_SOURCE_DIR}/tests/support/config/dns_roles.py"
+                        "$<TARGET_FILE:solaris_config_host>" ${dns_roles_args})
+                    set_tests_properties(config_dns_roles_contract PROPERTIES TIMEOUT 90 LABELS "m3;M3-D04")
                 endif()
             endif()
             add_executable(solaris_proxy_inbound_tests tests/contracts/inbound/proxy/inbound.c)

@@ -158,6 +158,11 @@ def main():
                  str(executable_path(example_build, args.config, "solaris_config_host")),
                  str(example_source / "config_host.conf"),
                  str(example_source / "config_host_reload.conf")], env=environment)
+            dns_roles = [sys.executable, str(Path(args.source).resolve().parent / "support/config/dns_roles.py"),
+                         str(executable_path(example_build, args.config, "solaris_config_host"))]
+            if configured_modules(build)["SOCKS5"]:
+                dns_roles.append("--socks5-outbound")
+            run(dns_roles, env=environment)
         c_only = work / "c-only-build"
         c_command = [args.cmake, "-S", str(source), "-B", str(c_only),
                      f"-DCMAKE_PREFIX_PATH={relocated}", f"-DCMAKE_BUILD_TYPE={args.config}",

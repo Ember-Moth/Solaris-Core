@@ -334,7 +334,8 @@ cfg_node_t *cfg_conf_parse(cfg_context_t *c, const void *bytes, size_t length) {
                     pair(c, section, key, auth, section_name);
                 } else if (!strcmp(section_name, "Host") ||
                            (!strcmp(section_name, "DNS") && key &&
-                            (!strcmp(key->scalar, "upstream") || !strcmp(key->scalar, "direct-upstream") ||
+                            (!strcmp(key->scalar, "upstream") || !strcmp(key->scalar, "route-upstream") ||
+                             !strcmp(key->scalar, "direct-upstream") ||
                              !strcmp(key->scalar, "proxy-upstream") || !strcmp(key->scalar, "bootstrap-upstream")))) {
                     cfg_node_t *values = list(c, value, section_name);
                     if (!strcmp(section_name, "Host") && values && values->count == 1)

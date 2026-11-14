@@ -146,7 +146,8 @@ DNS 的所有上游必须是数字 IP，裸地址默认 UDP/53；也接受 `udp:
 | `enabled` / `ipv6` | false / false |
 | `use-hosts` / `use-system-hosts` | true / true；系统 hosts 来自宿主快照 |
 | `ipv6-wait-ms` | 100 毫秒，0–10000 |
-| `upstream` | 客户端查询及路由目标的上游列表，最多 16 个 |
+| `upstream` | 客户端查询的上游列表，也是各角色的缺省值。每份列表最多 16 个数值端点 |
+| `route-upstream` | 目的 IP 路由规则触发域名解析时使用的有序列表。省略时使用 upstream。Direct 可复用本次路由选中的数值地址 |
 | `direct-upstream` / `proxy-upstream` / `bootstrap-upstream` | 独立角色列表；缺省使用显式 upstream 集合，不添加其他服务器 |
 | `mode` | 缺省或 normal；Fake-IP 答复尚未接线 |
 | `cache-algorithm` | 缺省或 lru |

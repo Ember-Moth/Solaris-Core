@@ -106,6 +106,17 @@ int main(void) {
     CHECK(solaris_hosts_lookup(dns->validated_hosts, "ALIAS.TEST.", 0, &result) == SOLARIS_OK &&
           result.address_count == 2);
     solaris_config_release(image);
+    image = valid(DIRECT "[DNS]\nenabled=true\nupstream=127.0.0.1:5353\n"
+                  "route-upstream=tcp://127.0.0.1:5354,udp://[::1]:5355\n");
+    dns = solaris_config_dns(image);
+    const solaris_dns_upstream_t *routes = dns->upstreams[SOLARIS_DNS_ROUTE_TARGET - 1];
+    CHECK(dns->upstream_count[SOLARIS_DNS_ROUTE_TARGET - 1] == 2);
+    CHECK(routes[0].transport == SOLARIS_DNS_TRANSPORT_TCP && routes[0].address.port == 5354);
+    CHECK(routes[1].transport == SOLARIS_DNS_TRANSPORT_UDP && routes[1].address.port == 5355);
+    CHECK(dns->upstream_count[SOLARIS_DNS_CLIENT_QUERY - 1] == 1 &&
+          dns->upstreams[SOLARIS_DNS_CLIENT_QUERY - 1][0].address.port == 5353);
+    solaris_config_release(image);
+    invalid(DIRECT "[DNS]\nroute-upstream=tcp://unresolved.test:53\n", SOLARIS_ENOTSUP);
     image = valid(DIRECT "[Host]\nexternal.test=other.test\n");
     CHECK(solaris_hosts_lookup(solaris_config_dns(image)->validated_hosts, "external.test", 0, &result) == SOLARIS_OK);
     CHECK(result.kind == SOLARIS_HOSTS_ALIAS && !strcmp(result.terminal_name, "other.test"));
