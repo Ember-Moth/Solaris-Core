@@ -1,3 +1,4 @@
+#include "support/runtime/files.h"
 #include "observe/probe/http.h"
 #include "support/runtime/event.h"
 #include <stdio.h>
@@ -64,7 +65,7 @@ static solaris_config_field_t field(const char *name, const char *value)
 static solaris_config_field_t number(const char *name, int64_t value)
 { solaris_config_field_t f = {.name = name, .value = {.kind = SOLARIS_CONFIG_INTEGER, .value.integer = value}}; return f; }
 static size_t read_file(const char *path, char *out, size_t capacity)
-{ FILE *file = fopen(path, "rb"); CHECK(file != NULL); size_t n = fread(out, 1u, capacity - 1u, file); CHECK(feof(file)); fclose(file); out[n] = '\0'; return n; }
+{ FILE *file = solaris_test_fopen(path, "rb"); CHECK(file != NULL); size_t n = fread(out, 1u, capacity - 1u, file); CHECK(feof(file)); fclose(file); out[n] = '\0'; return n; }
 int main(int argc, char **argv)
 {
     CHECK(argc >= 10 && argc <= 12);
@@ -125,7 +126,7 @@ int main(int argc, char **argv)
     }
     solaris_select_member_snapshot_t one, two;
     CHECK(solaris_select_member_snapshot(control, 0u, &one) == SOLARIS_OK && solaris_select_member_snapshot(control, 1u, &two) == SOLARIS_OK);
-    CHECK(!one.checking && !two.checking && one.health == (atoi(argv[9]) == 0 ? SOLARIS_HEALTH_PASS : SOLARIS_HEALTH_FAIL) && two.health == SOLARIS_HEALTH_FAIL);
+    CHECK(!one.checking && !two.checking && one.health == (uint32_t)(atoi(argv[9]) == 0 ? SOLARIS_HEALTH_PASS : SOLARIS_HEALTH_FAIL) && two.health == SOLARIS_HEALTH_FAIL);
     solaris_tracker_totals_t users, probes; CHECK(solaris_tracker_totals(tracker, SOLARIS_FLOW_USER, &users) == SOLARIS_OK && users.created == 0u);
     CHECK(solaris_tracker_totals(tracker, SOLARIS_FLOW_PROBE, &probes) == SOLARIS_OK && probes.created == 6u && probes.closed == 6u && probes.active == 0u);
     solaris_connection_snapshot_t entries[16]; size_t needed;

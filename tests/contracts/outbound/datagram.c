@@ -1,3 +1,5 @@
+#include "support/runtime/env.h"
+#include "support/runtime/files.h"
 #include "contracts/module/module.h"
 #include "support/runtime/event.h"
 #include "observe/connections/tracker.h"
@@ -166,8 +168,8 @@ int main(int argc, char **argv)
 {
     CHECK(argc >= 10 && argc <= 14);
     int uot = argc >= 11 && strcmp(argv[10], "native") != 0;
-    int no_empty = getenv("SOLARIS_TEST_SKIP_EMPTY") != NULL || (argc >= 11 && (strcmp(argv[10], "xudp-sing") == 0 || strcmp(argv[10], "xudp-xray") == 0));
-    int numeric_reply = getenv("SOLARIS_TEST_NUMERIC_REPLIES") != NULL || (argc >= 11 && strcmp(argv[10], "xudp-xray") == 0 && atoi(argv[8]) == 6);
+    int no_empty = solaris_test_env_set("SOLARIS_TEST_SKIP_EMPTY") || (argc >= 11 && (strcmp(argv[10], "xudp-sing") == 0 || strcmp(argv[10], "xudp-xray") == 0));
+    int numeric_reply = solaris_test_env_set("SOLARIS_TEST_NUMERIC_REPLIES") || (argc >= 11 && strcmp(argv[10], "xudp-xray") == 0 && atoi(argv[8]) == 6);
     solaris_budget_t *budget; CHECK(solaris_budget_create(16u * 1024u * 1024u, NULL, &budget) == SOLARIS_OK);
     solaris_replay_store_t *replay; CHECK(solaris_replay_create(budget, 1024u, 0u, NULL, NULL, &replay) == SOLARIS_OK);
     solaris_tracker_t *tracker; CHECK(solaris_tracker_create(budget, 8u, 8u, &tracker) == SOLARIS_OK);
@@ -187,7 +189,7 @@ int main(int argc, char **argv)
     }
     char pem[16384];
     if (argc >= 12 && strcmp(argv[11], "-") != 0) {
-        FILE *file = fopen(argv[11], "rb"); CHECK(file != NULL);
+        FILE *file = solaris_test_fopen(argv[11], "rb"); CHECK(file != NULL);
         size_t size = fread(pem, 1u, sizeof(pem) - 1u, file); fclose(file); CHECK(size > 0u); pem[size] = '\0';
         fields[count++] = (solaris_config_field_t){.name = "tls", .value = {.kind = SOLARIS_CONFIG_BOOL, .value.boolean = 1}};
         fields[count++] = string_field("servername", "localhost"); fields[count++] = string_field("ca-pem", pem);

@@ -1,3 +1,5 @@
+#include "support/runtime/env.h"
+#include "support/runtime/files.h"
 #include "contracts/module/module.h"
 #include "runtime/executor/executor.h"
 #include "support/runtime/event.h"
@@ -195,13 +197,13 @@ int main(int argc, char **argv)
     solaris_registry_t *registry;
     CHECK(solaris_builtin_registry_create(budget, &registry, NULL) == SOLARIS_OK);
     solaris_config_field_t fields[16]; size_t n = 0u;
-    const char *server = getenv("SOLARIS_TEST_SERVER");
+    char *server = solaris_test_env_copy("SOLARIS_TEST_SERVER");
     fields[n++] = string_field("server", server != NULL ? server : "127.0.0.1");
     fields[n++] = integer_field("port", atoi(argv[2]));
     fields[n++] = integer_field("pending-bytes", PROXY_PAYLOAD);
     fields[n++] = integer_field("pending-requests", 1);
     fields[n++] = integer_field("read-chunk-size", 113);
-    const char *timeout = getenv("SOLARIS_TEST_OPEN_TIMEOUT_MS");
+    char *timeout = solaris_test_env_copy("SOLARIS_TEST_OPEN_TIMEOUT_MS");
     if (timeout != NULL) fields[n++] = integer_field("open-timeout-ms", atoi(timeout));
     if (strcmp(argv[1], "socks5") == 0) {
         if (strcmp(argv[5], "-") != 0 || strcmp(argv[6], "-") != 0) {
@@ -215,7 +217,7 @@ int main(int argc, char **argv)
     if (argc >= 12) fields[n++] = string_field("flow", argv[11]);
     char pem[16384];
     if (strcmp(argv[7], "-") != 0) {
-        FILE *file = fopen(argv[7], "rb"); CHECK(file != NULL);
+        FILE *file = solaris_test_fopen(argv[7], "rb"); CHECK(file != NULL);
         size_t size = fread(pem, 1u, sizeof(pem) - 1u, file); fclose(file); CHECK(size > 0u); pem[size] = '\0';
         fields[n++] = (solaris_config_field_t){.name = "tls", .value = {.kind = SOLARIS_CONFIG_BOOL, .value.boolean = 1}};
         fields[n++] = string_field("servername", "localhost"); fields[n++] = string_field("ca-pem", pem);
@@ -224,12 +226,13 @@ int main(int argc, char **argv)
     solaris_module_config_t *config;
     solaris_error_t error;
     solaris_status_t rc = solaris_registry_compile(registry, argv[1], &view, &config, &error);
+    free(server); free(timeout);
     if (rc != SOLARIS_OK) fprintf(stderr, "compile: %s\n", error.message);
     CHECK(rc == SOLARIS_OK); solaris_registry_destroy(registry);
     solaris_tls_context_t *inner_trust = NULL;
 #if SOLARIS_HAS_TLS
     if (argc == 13) {
-        FILE *file = fopen(argv[12], "rb"); CHECK(file != NULL);
+        FILE *file = solaris_test_fopen(argv[12], "rb"); CHECK(file != NULL);
         size_t size = fread(pem, 1u, sizeof(pem), file); CHECK(feof(file)); fclose(file);
         CHECK(solaris_tls_context_create(budget, pem, size, &inner_trust) == SOLARIS_OK);
     }

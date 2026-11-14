@@ -1,3 +1,4 @@
+#include "support/runtime/files.h"
 #include "transport/datagram/stream.h"
 #include "codec/uot/codec.h"
 #include "codec/xudp/codec.h"
@@ -208,7 +209,7 @@ static void cancel(void *context, solaris_status_t status)
 static size_t load(const char *directory, unsigned int id, uint8_t *out, size_t capacity)
 {
     char path[1024]; CHECK(snprintf(path, sizeof(path), "%s/frame-%u.bin", directory, id) > 0);
-    FILE *file = fopen(path, "rb"); CHECK(file != NULL);
+    FILE *file = solaris_test_fopen(path, "rb"); CHECK(file != NULL);
     size_t n = fread(out, 1u, capacity, file); CHECK(feof(file)); fclose(file); return n;
 }
 static void run(const char *directory, int mode, int failure)

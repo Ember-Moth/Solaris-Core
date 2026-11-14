@@ -155,9 +155,13 @@ int main(void)
     for (size_t i = 0; i < sizeof(invalid_headers) / sizeof(*invalid_headers); ++i)
         invalid(invalid_headers[i]);
     char many[4096] = "GET / HTTP/1.1\r\nHost: example.com\r\n";
-    for (unsigned i = 0; i < 700; ++i)
-        strcat(many, "X:y\r\n");
-    strcat(many, "\r\n");
+    size_t used = strlen(many);
+    CHECK(used + 700 * 5 + 3 <= sizeof(many));
+    for (unsigned i = 0; i < 700; ++i) {
+        memcpy(many + used, "X:y\r\n", 5);
+        used += 5;
+    }
+    memcpy(many + used, "\r\n", 3);
     invalid(many);
     const char *chunked =
         "POST http://example.com/a HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n";

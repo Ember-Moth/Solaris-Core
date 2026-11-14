@@ -71,7 +71,7 @@ static void priorities(fixture_t *f)
         solaris_hosts_t *h = build(f, permutation ? reversed : entries, 11, NULL, 0);
         for (size_t i = 0; i < sizeof(queries) / sizeof(*queries); i++) {
             solaris_hosts_result_t r = lookup(h, queries[i].name, 4);
-            CHECK(r.matched == (queries[i].id != 0));
+            CHECK((r.matched != 0) == (queries[i].id != 0));
             if (r.matched) CHECK(r.address_count == 1 && r.addresses[0].ip[3] == queries[i].id);
         }
         solaris_hosts_release(h);

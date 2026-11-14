@@ -56,7 +56,7 @@ int main(void) {
     int available = SOLARIS_HAS_DIRECT && SOLARIS_HAS_BLOCK;
     int failed = status != (available ? SOLARIS_OK : SOLARIS_ENOTSUP) || error.code != status;
     if (available) {
-        solaris_config_snapshot_t snapshot;
+        solaris_config_snapshot_t snapshot = {0};
         solaris_config_node_info_t node;
         failed |= !config || solaris_config_get_snapshot(config, &snapshot) != SOLARIS_OK;
         if (!failed)

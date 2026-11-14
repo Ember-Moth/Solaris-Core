@@ -1,3 +1,4 @@
+#include "support/runtime/files.h"
 #include "transport/tls/tls.h"
 #include "support/runtime/event.h"
 #include <stdio.h>
@@ -110,7 +111,7 @@ int main(int argc, char **argv)
 {
     CHECK(argc == 4); fixture_t f = {.cancel = atoi(argv[3])}; solaris_budget_t *budget;
     CHECK(solaris_budget_create(8u * 1024u * 1024u, NULL, &budget) == SOLARIS_OK);
-    char pem[16384]; FILE *file = fopen(argv[2], "rb"); CHECK(file != NULL);
+    char pem[16384]; FILE *file = solaris_test_fopen(argv[2], "rb"); CHECK(file != NULL);
     size_t n = fread(pem, 1u, sizeof(pem), file); CHECK(feof(file)); fclose(file);
     CHECK(solaris_tls_context_create(budget, pem, n, &f.trust) == SOLARIS_OK);
     CHECK(solaris_test_event_init(&f.done, 0u) == 0);

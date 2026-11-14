@@ -1,3 +1,4 @@
+#include "support/runtime/files.h"
 #include "adapters/outbound/vless/encryption/client.h"
 #include "adapters/outbound/vless/encryption/crypto.h"
 #include <stdio.h>
@@ -21,13 +22,13 @@ static solaris_status_t random_bytes(void *context, uint8_t *out, size_t size)
 static size_t load(const char *root, const char *name, int id, uint8_t *out, size_t capacity)
 {
     char path[1024]; CHECK(snprintf(path, sizeof(path), "%s/%s-%d.bin", root, name, id) > 0);
-    FILE *file = fopen(path, "rb"); CHECK(file != NULL);
+    FILE *file = solaris_test_fopen(path, "rb"); CHECK(file != NULL);
     size_t n = fread(out, 1u, capacity, file); CHECK(feof(file)); fclose(file); return n;
 }
 static void save(const char *root, const char *name, int id, const uint8_t *data, size_t size)
 {
     char path[1024]; CHECK(snprintf(path, sizeof(path), "%s/%s-%d.bin", root, name, id) > 0);
-    FILE *file = fopen(path, "wb"); CHECK(file != NULL); CHECK(fwrite(data, 1u, size, file) == size); CHECK(fclose(file) == 0);
+    FILE *file = solaris_test_fopen(path, "wb"); CHECK(file != NULL); CHECK(fwrite(data, 1u, size, file) == size); CHECK(fclose(file) == 0);
 }
 static void init(fixture_t *f, const char *root, int id)
 {

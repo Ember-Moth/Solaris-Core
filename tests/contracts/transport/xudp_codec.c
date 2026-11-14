@@ -1,3 +1,4 @@
+#include "support/runtime/files.h"
 #include "codec/xudp/codec.h"
 #include "codec/address/socks.h"
 #include <stdio.h>
@@ -9,7 +10,7 @@ static const solaris_datagram_codec_ops_t *ops = &solaris_xudp_codec;
 static size_t load(const char *directory, const char *kind, unsigned int id, uint8_t *out, size_t capacity)
 {
     char path[1024]; CHECK(snprintf(path, sizeof(path), "%s/%s-%u.bin", directory, kind, id) > 0);
-    FILE *file = fopen(path, "rb"); CHECK(file != NULL);
+    FILE *file = solaris_test_fopen(path, "rb"); CHECK(file != NULL);
     size_t size = fread(out, 1u, capacity, file); CHECK(size > 0u && feof(file)); fclose(file); return size;
 }
 static void *allocate(void *context, size_t size) { return *(int *)context ? NULL : malloc(size); }

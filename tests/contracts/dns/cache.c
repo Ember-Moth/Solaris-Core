@@ -139,7 +139,7 @@ static void negative(fixture_t *f)
         if (mode == 2) cname(&p, "www.example.com", "missing.example.com", 5);
         soa(&p, "example.com", mode == 1 ? 20 : 120, mode == 1 ? 100 : 30);
         solaris_dns_wire_t *r = parse(f, &p); solaris_dns_cache_put_result_t result = put(c, &k, q, r);
-        CHECK(result.stored && result.kind == (mode == 0 ? SOLARIS_DNS_CACHE_NXDOMAIN : SOLARIS_DNS_CACHE_NODATA));
+        CHECK(result.stored && result.kind == (uint32_t)(mode == 0 ? SOLARIS_DNS_CACHE_NXDOMAIN : SOLARIS_DNS_CACHE_NODATA));
         CHECK(result.ttl_seconds == (mode == 0 ? 30u : mode == 1 ? 20u : 5u)); solaris_dns_wire_release(r);
         time_ms(f, 2004000); solaris_dns_cache_hit_t hit = get(c, &k, q, 0); CHECK(hit.found);
         r = parse_buffer(f, hit.wire);
@@ -157,7 +157,7 @@ static void negative(fixture_t *f)
         if (mode == 4) { begin(&p, "www.example.com", 1, 0x1234, 0x8183); a_record(&p, "www.example.com", 10, 1); soa(&p, "example.com", 30, 20); }
         if (mode == 5) { begin(&p, "www.example.com", 1, 0x1234, 0x8180); cname(&p, "www.example.com", "missing.other.test", 30); soa(&p, "example.com", 30, 20); }
         solaris_dns_wire_t *r = parse(f, &p); solaris_dns_cache_put_result_t result = put(c, &k, q, r);
-        CHECK(!result.stored && result.reason == (mode == 2 ? SOLARIS_DNS_CACHE_SKIP_ZERO_TTL : SOLARIS_DNS_CACHE_SKIP_NO_ANSWER)); solaris_dns_wire_release(r);
+        CHECK(!result.stored && result.reason == (uint32_t)(mode == 2 ? SOLARIS_DNS_CACHE_SKIP_ZERO_TTL : SOLARIS_DNS_CACHE_SKIP_NO_ANSWER)); solaris_dns_wire_release(r);
     }
     solaris_dns_wire_release(q); CHECK(solaris_dns_cache_destroy(c) == SOLARIS_OK); f->groups++;
 }

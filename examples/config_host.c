@@ -187,7 +187,7 @@ static void print_listener(const solaris_config_listener_info_t *listener)
 static void status(host_t *host, const char *command)
 {
     solaris_engine_snapshot_t runtime;
-    solaris_active_config_snapshot_t active;
+    solaris_active_config_snapshot_t active = {0};
     solaris_status_t rc = solaris_engine_get_snapshot(host->engine, &runtime, NULL);
     if (rc == SOLARIS_OK)
         rc = solaris_engine_get_config_snapshot(host->engine, &active, NULL);
@@ -213,7 +213,7 @@ static void status(host_t *host, const char *command)
 }
 static solaris_status_t activate(host_t *host, solaris_config_t *image, solaris_error_t *error)
 {
-    solaris_config_snapshot_t info;
+    solaris_config_snapshot_t info = {0};
     solaris_status_t rc = solaris_config_get_snapshot(image, &info);
     if (rc != SOLARIS_OK)
         return rc;
@@ -301,7 +301,7 @@ static uint64_t group_id(solaris_control_snapshot_t *snapshot, const solaris_con
 static void controls(host_t *host)
 {
     solaris_control_snapshot_t *snapshot = NULL;
-    solaris_control_info_t info;
+    solaris_control_info_t info = {0};
     solaris_status_t rc = solaris_engine_get_control_snapshot(host->engine, &snapshot, NULL);
     if (rc == SOLARIS_OK)
         rc = solaris_control_snapshot_get_info(snapshot, &info);
@@ -349,7 +349,7 @@ static void controls(host_t *host)
 static void select_or_probe(host_t *host, int count, char **words)
 {
     solaris_control_snapshot_t *snapshot = NULL;
-    solaris_control_info_t info;
+    solaris_control_info_t info = {0};
     solaris_error_t error = {0};
     solaris_status_t rc = solaris_engine_get_control_snapshot(host->engine, &snapshot, &error);
     if (rc == SOLARIS_OK)
@@ -528,7 +528,7 @@ static int command(host_t *host, int count, char **words)
                               : !strcmp(words[1], "global") ? SOLARIS_MODE_GLOBAL
                               : !strcmp(words[1], "direct") ? SOLARIS_MODE_DIRECT
                                                             : 0;
-        solaris_active_config_snapshot_t active;
+        solaris_active_config_snapshot_t active = {0};
         solaris_error_t error = {0};
         completion_t c;
         completion_init(&c);
@@ -563,7 +563,7 @@ static int command(host_t *host, int count, char **words)
             rc = solaris_engine_start(host->engine, &id, NULL);
             rc = wait_operation(host, rc, id, NULL);
         }
-        solaris_active_config_snapshot_t active;
+        solaris_active_config_snapshot_t active = {0};
         solaris_error_t error = {0};
         if (rc == SOLARIS_OK)
             rc = solaris_engine_get_config_snapshot(host->engine, &active, &error);

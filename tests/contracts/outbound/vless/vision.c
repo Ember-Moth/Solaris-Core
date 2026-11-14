@@ -1,3 +1,4 @@
+#include "support/runtime/files.h"
 #include "adapters/outbound/vless/vision/codec.h"
 #include "adapters/outbound/vless/datagram.h"
 #include "codec/address/vmess.h"
@@ -16,12 +17,12 @@ static solaris_status_t random_bytes(void *context, uint8_t *out, size_t size)
 static size_t load(const char *root, const char *name, uint8_t *out, size_t capacity)
 {
     char path[1024]; CHECK(snprintf(path, sizeof(path), "%s/%s", root, name) > 0);
-    FILE *file = fopen(path, "rb"); CHECK(file != NULL); size_t size = fread(out, 1u, capacity, file); CHECK(feof(file)); fclose(file); return size;
+    FILE *file = solaris_test_fopen(path, "rb"); CHECK(file != NULL); size_t size = fread(out, 1u, capacity, file); CHECK(feof(file)); fclose(file); return size;
 }
 static void save(const char *root, const char *name, const solaris_buffer_t *buffer)
 {
     char path[1024]; CHECK(snprintf(path, sizeof(path), "%s/%s", root, name) > 0);
-    FILE *file = fopen(path, "wb"); CHECK(file != NULL);
+    FILE *file = solaris_test_fopen(path, "wb"); CHECK(file != NULL);
     CHECK(fwrite(solaris_buffer_data(buffer), 1u, solaris_buffer_length(buffer), file) == solaris_buffer_length(buffer)); CHECK(fclose(file) == 0);
 }
 static void *create(environment_t *env, const char *root)

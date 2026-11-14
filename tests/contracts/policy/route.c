@@ -264,7 +264,7 @@ static void matching(fixture_t *f)
     for (unsigned i = 0; i < 10; ++i) {
         scenario_t s; initialize(&s, f, i % 2); rule(&s, kinds[i], values[i], 0, 2);
         if (i == 4) CHECK(solaris_address_parse("2001:db8::9", 0, &s.answers[0]) == SOLARIS_OK);
-        execute(&s); CHECK(s.resolves == (i == 3 || i == 4));
+        execute(&s); CHECK(s.resolves == (i == 3 || i == 4 ? 1u : 0u));
     }
     scenario_t s; initialize(&s, f, 0); rule(&s, "DOMAIN-SUFFIX", "example.com", 0, 2);
     CHECK(solaris_address_parse("badexample.com", 443, &s.options.metadata.destination) == SOLARIS_OK);

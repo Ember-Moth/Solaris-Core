@@ -1,3 +1,5 @@
+#include "support/runtime/env.h"
+#include "support/runtime/files.h"
 #include "contracts/module/module.h"
 #include "contracts/flow/udp.h"
 #include "support/runtime/event.h"
@@ -120,8 +122,8 @@ int main(int argc, char **argv)
 {
     CHECK(argc >= 11 && argc <= 14); CHECK(atoi(argv[8]) == 6 || atoi(argv[8]) == 3);
     int uot = strcmp(argv[10], "native") != 0;
-    int empty = getenv("SOLARIS_TEST_SKIP_EMPTY") == NULL && strcmp(argv[10], "xudp-sing") != 0 && strcmp(argv[10], "xudp-xray") != 0;
-    fixture_t f = {.failure = atoi(argv[8]) == 3, .trace = getenv("SOLARIS_TEST_TRACE") != NULL};
+    int empty = !solaris_test_env_set("SOLARIS_TEST_SKIP_EMPTY") && strcmp(argv[10], "xudp-sing") != 0 && strcmp(argv[10], "xudp-xray") != 0;
+    fixture_t f = {.failure = atoi(argv[8]) == 3, .trace = solaris_test_env_set("SOLARIS_TEST_TRACE")};
     CHECK(solaris_budget_create(16u * 1024u * 1024u, NULL, &f.budget) == SOLARIS_OK);
     CHECK(solaris_tracker_create(f.budget, 8u, 8u, &f.tracker) == SOLARIS_OK);
     CHECK(solaris_replay_create(f.budget, 1024u, 0u, NULL, NULL, &f.replay) == SOLARIS_OK);
@@ -140,7 +142,7 @@ int main(int argc, char **argv)
     }
     char pem[16384];
     if (argc >= 12 && strcmp(argv[11], "-") != 0) {
-        FILE *file = fopen(argv[11], "rb"); CHECK(file != NULL);
+        FILE *file = solaris_test_fopen(argv[11], "rb"); CHECK(file != NULL);
         size_t size = fread(pem, 1u, sizeof(pem) - 1u, file); fclose(file); CHECK(size > 0u); pem[size] = '\0';
         fields[count++] = (solaris_config_field_t){.name = "tls", .value = {.kind = SOLARIS_CONFIG_BOOL, .value.boolean = 1}};
         fields[count++] = string_field("servername", "localhost"); fields[count++] = string_field("ca-pem", pem);
@@ -164,7 +166,7 @@ int main(int argc, char **argv)
             CHECK(solaris_address_parse(n == 3u ? "::1" : n == 4u ? "localhost" : "127.0.0.1",
                 (uint16_t)atoi(argv[n == 3u ? 7 : n == 1u ? 6 : 5]), &slot->targets[n]) == SOLARIS_OK);
             slot->sources[n] = slot->targets[n];
-            if (n == 4u && getenv("SOLARIS_TEST_NUMERIC_REPLIES") != NULL)
+            if (n == 4u && solaris_test_env_set("SOLARIS_TEST_NUMERIC_REPLIES"))
                 CHECK(solaris_address_parse("127.0.0.1", slot->targets[n].port, &slot->sources[n]) == SOLARIS_OK);
             slot->lengths[n] = n == 5u && empty ? 0u : n == 6u ? 6000u : 1024u + n;
         }

@@ -103,7 +103,7 @@ static void done(void *context, solaris_dns_exchange_t *exchange, const solaris_
     CHECK(solaris_executor_is_owner(env->owner));
     CHECK(result->view.config_revision == 11 && result->view.resolver_revision == 12 &&
         result->view.network_revision == 13 && result->view.selection_revision == 14);
-    CHECK(result->view.role == (!strcmp(env->mode, "bootstrap") ? SOLARIS_DNS_BOOTSTRAP : SOLARIS_DNS_CLIENT_QUERY));
+    CHECK(result->view.role == (uint32_t)(!strcmp(env->mode, "bootstrap") ? SOLARIS_DNS_BOOTSTRAP : SOLARIS_DNS_CLIENT_QUERY));
     CHECK(result->completed_ns >= result->started_ns && result->duration_ns == result->completed_ns - result->started_ns);
     CHECK(result->selected_alpn_length == 0 || (result->selected_alpn_length == 3 && !memcmp(result->selected_alpn, "dot", 3)));
     env->socket_closed = socket_closed(env); CHECK(env->socket_closed);

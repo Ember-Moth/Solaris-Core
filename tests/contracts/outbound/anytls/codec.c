@@ -1,3 +1,4 @@
+#include "support/runtime/files.h"
 #include "adapters/outbound/anytls/internal.h"
 #include "contracts/module/module.h"
 #include <stdio.h>
@@ -16,7 +17,7 @@ static solaris_status_t random_bytes(void *context, uint8_t *out, size_t size) {
 static size_t load(const char *root, const char *name, uint8_t *out, size_t capacity)
 {
     char path[1024]; CHECK(snprintf(path, sizeof(path), "%s/%s", root, name) > 0);
-    FILE *f = fopen(path, "rb"); CHECK(f != NULL); size_t size = fread(out, 1u, capacity, f); CHECK(feof(f)); fclose(f); return size;
+    FILE *f = solaris_test_fopen(path, "rb"); CHECK(f != NULL); size_t size = fread(out, 1u, capacity, f); CHECK(feof(f)); fclose(f); return size;
 }
 static void check_batch(const solaris_session_batch_t *batch, const uint8_t *expected, size_t size)
 {

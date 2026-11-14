@@ -1,3 +1,4 @@
+#include "support/runtime/files.h"
 #include "adapters/outbound/socks5/codec.h"
 #include "contracts/module/module.h"
 #include <stdio.h>
@@ -10,7 +11,7 @@ static void *allocate(void *context, size_t size) { environment_t *env = context
 static size_t load(const char *directory, const char *name, uint8_t *out, size_t capacity)
 {
     char path[1024]; CHECK(snprintf(path, sizeof(path), "%s/%s", directory, name) > 0);
-    FILE *file = fopen(path, "rb"); CHECK(file != NULL); size_t n = fread(out, 1u, capacity, file); CHECK(feof(file)); fclose(file); return n;
+    FILE *file = solaris_test_fopen(path, "rb"); CHECK(file != NULL); size_t n = fread(out, 1u, capacity, file); CHECK(feof(file)); fclose(file); return n;
 }
 static void output(environment_t *env, solaris_socks5_handshake_t *state, const char *directory, const char *name)
 {

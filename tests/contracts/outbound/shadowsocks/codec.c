@@ -1,3 +1,4 @@
+#include "support/runtime/files.h"
 #include "adapters/outbound/shadowsocks/internal.h"
 #include "adapters/outbound/shadowsocks/packet.h"
 #include "codec/address/socks.h"
@@ -51,7 +52,7 @@ static solaris_status_t packet_check(solaris_ss_packet_t *codec, const char *dir
     unsigned int variant, int success)
 {
     char path[1024]; CHECK(snprintf(path, sizeof(path), "%s/packet-%u-%u.bin", directory, method, variant) > 0);
-    FILE *file = fopen(path, "rb"); CHECK(file != NULL);
+    FILE *file = solaris_test_fopen(path, "rb"); CHECK(file != NULL);
     uint8_t wire[66000]; size_t length = fread(wire, 1u, sizeof(wire), file); CHECK(length > 0u && feof(file)); fclose(file);
     solaris_buffer_t *plain = NULL; solaris_address_t source;
     solaris_status_t rc = solaris_ss_packet_decode(codec, wire, length, &source, &plain);
@@ -109,7 +110,7 @@ static void check_wire(const char *directory, const char *kind, unsigned int met
     const solaris_buffer_t *buffer)
 {
     char path[1024]; CHECK(snprintf(path, sizeof(path), "%s/request-%s-%u-%u.bin", directory, kind, method, depth) > 0);
-    FILE *file = fopen(path, "rb"); CHECK(file != NULL);
+    FILE *file = solaris_test_fopen(path, "rb"); CHECK(file != NULL);
     uint8_t expected[2048]; size_t length = fread(expected, 1u, sizeof(expected), file); CHECK(feof(file)); fclose(file);
     CHECK(length == solaris_buffer_length(buffer)); CHECK(memcmp(expected, solaris_buffer_data(buffer), length) == 0);
 }
@@ -146,7 +147,11 @@ static void request_tests(const char *directory, solaris_budget_t *budget)
             pos += (size_t)EVP_EncodeBlock((uint8_t *)chain + pos, identity, method == 3u ? 16u : 32u);
             chain[pos++] = ':';
         }
-        strcpy(chain + pos, password(method));
+        const char *key_text = password(method);
+        size_t key_length = strlen(key_text);
+        CHECK(pos + key_length + 1 <= sizeof(chain));
+        memcpy(chain + pos, key_text, key_length + 1);
+        pos += key_length;
         solaris_ss_parameters_t parameters = {.source = {.random = fixed_random, .unix_seconds = fixed_time}};
         CHECK(solaris_ss_key_parse(methods[method], chain, &parameters.key) == SOLARIS_OK);
         CHECK(parameters.key.identity_count == depth);
@@ -169,7 +174,9 @@ static void request_tests(const char *directory, solaris_budget_t *budget)
         packet_check(packet, directory, method, 0u, 0);
         solaris_ss_packet_destroy(packet);
         if (depth == SOLARIS_SS_MAX_IDENTITIES) {
-            strcat(chain, ":"); strcat(chain, password(method));
+            CHECK(pos + 1 + key_length + 1 <= sizeof(chain));
+            chain[pos++] = ':';
+            memcpy(chain + pos, key_text, key_length + 1);
             CHECK(solaris_ss_key_parse(methods[method], chain, &parameters.key) == SOLARIS_EINVAL);
         }
     }
@@ -370,7 +377,7 @@ int main(int argc, char **argv)
     CHECK(solaris_ss_key_parse("rc4-md5", "password", &invalid) == SOLARIS_ENOTSUP);
     for (unsigned int method = 0u; method < 6u; ++method) for (unsigned int variant = 0u; variant < 10u; ++variant) {
         char path[1024]; CHECK(snprintf(path, sizeof(path), "%s/stream-%u-%u.bin", argv[1], method, variant) > 0);
-        FILE *file = fopen(path, "rb"); CHECK(file != NULL);
+        FILE *file = solaris_test_fopen(path, "rb"); CHECK(file != NULL);
         uint8_t wire[66000]; size_t length = fread(wire, 1u, sizeof(wire), file); CHECK(length > 0u && feof(file)); fclose(file);
         solaris_ss_parameters_t parameters = {.source = {.random = fixed_random, .unix_seconds = fixed_time}};
         CHECK(solaris_ss_key_parse(methods[method], password(method), &parameters.key) == SOLARIS_OK);

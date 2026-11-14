@@ -1,3 +1,4 @@
+#include "support/runtime/files.h"
 #include "codec/ip/packet.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,7 +11,7 @@ static uint32_t get32(FILE *file)
 }
 int main(int argc, char **argv)
 {
-    CHECK(argc == 2); FILE *file = fopen(argv[1], "rb"); CHECK(file);
+    CHECK(argc == 2); FILE *file = solaris_test_fopen(argv[1], "rb"); CHECK(file);
     uint32_t count = get32(file);
     solaris_budget_t *budget; CHECK(solaris_budget_create(300000, NULL, &budget) == SOLARIS_OK);
     for (uint32_t i = 0; i < count; ++i) {

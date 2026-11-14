@@ -102,7 +102,7 @@ static void wire_done(void *context, solaris_dns_request_t *request, const solar
         CHECK(record && record->type == SOLARIS_DNS_A);
         CHECK(record->value.address[3] == (mode(e, "hosts") ? 9u : mode(e, "stale") && e->phase == 2u ? 43u : 42u));
         if (mode(e, "hosts")) CHECK(result->source == SOLARIS_DNS_SOURCE_HOSTS);
-        if (stale_mode(e) && e->phase) CHECK(result->source == SOLARIS_DNS_SOURCE_CACHE && result->stale == (e->phase == 1u));
+        if (stale_mode(e) && e->phase) CHECK(result->source == SOLARIS_DNS_SOURCE_CACHE && (result->stale != 0) == (e->phase == 1u));
         if (mode(e, "alias")) CHECK(solaris_dns_wire_record(result->response, 0)->type == SOLARIS_DNS_CNAME);
         solaris_dns_wire_release(e->retained); e->retained = result->response; solaris_dns_wire_retain(e->retained);
     } else CHECK(!result->response);

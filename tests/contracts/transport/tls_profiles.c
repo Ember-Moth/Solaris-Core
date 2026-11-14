@@ -1,3 +1,4 @@
+#include "support/runtime/files.h"
 #include "support/transport/tls_profiles/profile.h"
 #include <openssl/err.h>
 #include <openssl/mem.h>
@@ -118,7 +119,7 @@ static int new_session(SSL *ssl, SSL_SESSION *session)
 }
 static SSL_SESSION *load_session(SSL_CTX *ctx, const char *path)
 {
-    FILE *file = fopen(path, "rb"); CHECK(file);
+    FILE *file = solaris_test_fopen(path, "rb"); CHECK(file);
     uint8_t bytes[16384]; size_t n = fread(bytes, 1u, sizeof(bytes), file); CHECK(n > 0u && n < sizeof(bytes) && feof(file)); fclose(file);
     return SSL_SESSION_from_bytes(bytes, n, ctx);
 }
@@ -126,7 +127,7 @@ static void save_session(const SSL_SESSION *session, const char *path)
 {
     uint8_t *bytes = NULL; size_t size;
     CHECK(session && SSL_SESSION_is_resumable(session) && SSL_SESSION_to_bytes(session, &bytes, &size));
-    FILE *file = fopen(path, "wb"); CHECK(file && fwrite(bytes, 1u, size, file) == size); CHECK(fclose(file) == 0); OPENSSL_free(bytes);
+    FILE *file = solaris_test_fopen(path, "wb"); CHECK(file && fwrite(bytes, 1u, size, file) == size); CHECK(fclose(file) == 0); OPENSSL_free(bytes);
 }
 int main(int argc, char **argv)
 {

@@ -1,3 +1,4 @@
+#include "support/runtime/files.h"
 #include "contracts/module/module.h"
 #include "support/runtime/event.h"
 #include <stdio.h>
@@ -106,7 +107,7 @@ int main(int argc, char **argv)
     fields[count++] = text("encryption", argv[4]);
     if (strcmp(argv[5], "-") != 0) fields[count++] = text("flow", argv[5]);
     if (strcmp(argv[3], "-") != 0) {
-        FILE *file = fopen(argv[3], "rb"); CHECK(file != NULL);
+        FILE *file = solaris_test_fopen(argv[3], "rb"); CHECK(file != NULL);
         size_t size = fread(pem, 1u, sizeof(pem) - 1u, file); fclose(file); CHECK(size > 0u); pem[size] = '\0';
         fields[count++] = (solaris_config_field_t){.name = "tls", .value = {.kind = SOLARIS_CONFIG_BOOL, .value.boolean = 1}};
         fields[count++] = text("servername", "localhost"); fields[count++] = text("ca-pem", pem);

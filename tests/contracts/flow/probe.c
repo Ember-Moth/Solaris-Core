@@ -159,7 +159,9 @@ static void run(int mode, int allocation)
     const char *response = mode == INTERIM ? "HTTP/1.1 103 Early Hints\r\nLink: </x>\r\n\r\nHTTP/1.1 302 Found\r\nLocation: /other\r\n\r\n" :
         mode == HTTP_ERROR ? "HTTP/1.1 500 Broken\r\n\r\n" : mode == MALFORMED ? "HTTP/1.1 204 Fine\r\n folded: invalid\r\n\r\n" :
         mode == TRUNCATED ? "HTTP/1.1 204 Fine\r\nX-Header: partial" : "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n";
-    strcpy(env.response, response); env.response_size = strlen(response);
+    env.response_size = strlen(response);
+    CHECK(env.response_size < sizeof(env.response));
+    memcpy(env.response, response, env.response_size + 1u);
     if (mode == OVERSIZED) { memset(env.response, 'a', sizeof(env.response)); env.response_size = sizeof(env.response); }
     CHECK(solaris_executor_post(env.owner, start, &env) == SOLARIS_OK); solaris_test_event_wait(&env.ready);
     if (mode == TIMEOUT || mode == CANCEL_WRITE || mode == STOP_WRITE || mode == RESPONSE_BEFORE_WRITE) {

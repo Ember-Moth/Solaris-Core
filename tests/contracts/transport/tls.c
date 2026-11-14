@@ -1,3 +1,4 @@
+#include "support/runtime/files.h"
 #include "transport/tls/tls.h"
 #include "support/runtime/event.h"
 #include <stdio.h>
@@ -188,7 +189,7 @@ static void run_case(solaris_budget_t *budget, solaris_tls_context_t *trust, int
 int main(int argc, char **argv)
 {
     CHECK(argc == 6);
-    FILE *file = fopen(argv[1], "rb"); CHECK(file != NULL);
+    FILE *file = solaris_test_fopen(argv[1], "rb"); CHECK(file != NULL);
     char pem[16384]; size_t size = fread(pem, 1u, sizeof(pem), file); CHECK(size > 0u && size < sizeof(pem)); fclose(file);
     solaris_budget_t *budget;
     CHECK(solaris_budget_create(8u * 1024u * 1024u, NULL, &budget) == SOLARIS_OK);
