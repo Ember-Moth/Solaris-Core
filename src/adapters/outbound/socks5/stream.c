@@ -97,6 +97,16 @@ static void carrier_closed(void *context, solaris_stream_t *carrier, solaris_sta
 {
     (void)carrier; socks5_stream_t *stream = context; stream->carrier = NULL; stream->carrier_gone = 1;
     if (!stream->scope.cancelled) {
+        /* A terminal socket error can arrive in the same I/O turn as a
+         * complete authentication denial, before the handshake pump runs. */
+        if (status == SOLARIS_EIO && !stream->opened && stream->begin < stream->end) {
+            solaris_socks5_handshake_t pending = stream->handshake;
+            size_t consumed = 0;
+            solaris_status_t reply = solaris_socks5_handshake_read(&pending,
+                stream->receive + stream->begin, stream->end - stream->begin, &consumed);
+            if (reply != SOLARIS_OK && reply != SOLARIS_EAGAIN && reply != SOLARIS_EBUSY)
+                status = reply;
+        }
         if (status == SOLARIS_OK && stream->carrier_eof) schedule(stream);
         else close_status(stream, status == SOLARIS_OK ? SOLARIS_EIO : status);
     }

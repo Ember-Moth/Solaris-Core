@@ -97,7 +97,8 @@ def main():
                 if data == b"A" and alternate is not None:
                     sock.sendto(b"", address)
                     alternate.sendto(b"ALT", address)
-            except socket.timeout:
+            except (socket.timeout, ConnectionResetError):
+                # Winsock can report a previous send to a cancelled UDP client.
                 continue
             except OSError:
                 break

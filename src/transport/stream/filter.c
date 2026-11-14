@@ -79,6 +79,10 @@ static void destroyed(void *context)
 static void close_status(stream_filter_t *filter, solaris_status_t status)
 {
     if (filter->close_requested) return;
+    /* Stop can close executor admission while a codec is preparing the next
+     * preface timer. The refused child operation belongs to the owner's stop. */
+    if (status == SOLARIS_ECLOSED && !solaris_executor_accepting(filter->scope.owner))
+        status = SOLARIS_ECANCELLED;
     filter->close_requested = 1; filter->close_status = status;
     solaris_scope_cancel(&filter->scope);
 }

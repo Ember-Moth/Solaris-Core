@@ -6,7 +6,7 @@
 #include <string.h>
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #x); abort(); } } while (0)
-enum { NORMAL, PAUSED, ACK_EOF, CANCEL_BEFORE, CANCEL_GREETING, CANCEL_APP, STOP_APP, LATE_METHOD, LATE_REPLY, PARTIAL_EOF, REJECT, ALLOCATE };
+enum { NORMAL, PAUSED, ACK_EOF, CANCEL_BEFORE, CANCEL_GREETING, CANCEL_APP, STOP_APP, LATE_METHOD, LATE_REPLY, PARTIAL_EOF, AUTH_CLOSE, REJECT, ALLOCATE };
 typedef struct environment environment_t;
 typedef struct mock_stream {
     environment_t *env;
@@ -58,6 +58,12 @@ static void mock_readable(void *context)
         if ((env->mode == LATE_METHOD && mock->current_phase == 0u) || (env->mode == LATE_REPLY && mock->current_phase == 2u))
             atomic_store(&env->clock, UINT64_C(11000000));
         mock->callbacks.on_data(mock->context, &mock->stream, buffer); solaris_buffer_release(buffer);
+        if (env->mode == AUTH_CLOSE && mock->current_phase == 1u) {
+            CHECK(!mock->busy && mock->begin == mock->end);
+            mock->closing = 1;
+            mock->callbacks.on_close(mock->context, &mock->stream, SOLARIS_EIO);
+            return;
+        }
     }
     if (mock->begin == mock->end && mock->input_eof && !mock->eof_delivered && !mock->closing) {
         mock->eof_delivered = 1; mock->callbacks.on_eof(mock->context, &mock->stream);
@@ -91,7 +97,7 @@ static solaris_status_t mock_write(void *state, const solaris_slice_t *slice, so
     const uint8_t *data = solaris_buffer_data(slice->buffer) + slice->offset;
     static const uint8_t greeting[] = {5,1,2}, auth[] = {1,7,'s','o','l','a','r','i','s',8,'p','a','s','s','w','o','r','d'}, request[] = {5,1,0,1,127,0,0,1,0,80};
     if (phase == 0u) { CHECK(slice->length == sizeof(greeting) && memcmp(data, greeting, sizeof(greeting)) == 0); const uint8_t reply[] = {5,2}; append(mock, reply, 2u); }
-    else if (phase == 1u) { CHECK(slice->length == sizeof(auth) && memcmp(data, auth, sizeof(auth)) == 0); const uint8_t reply[] = {1,0}; append(mock, reply, 2u); }
+    else if (phase == 1u) { CHECK(slice->length == sizeof(auth) && memcmp(data, auth, sizeof(auth)) == 0); const uint8_t reply[] = {1, env->mode == AUTH_CLOSE ? 1 : 0}; append(mock, reply, 2u); }
     else if (phase == 2u) {
         CHECK(slice->length == sizeof(request) && memcmp(data, request, sizeof(request)) == 0);
         const uint8_t reply[] = {5,0,0,1,0,0,0,0,0,0,'e','a','r','l','y'};
@@ -235,6 +241,7 @@ static void run(int mode, int failure)
         CHECK(atomic_load(&env.opens) == 1u && atomic_load(&env.closes) == 1u);
         if (mode == NORMAL || mode == PAUSED || mode == ACK_EOF) CHECK(env.open_status == SOLARIS_OK && env.close_status == SOLARIS_OK && env.writes == 1u && env.completions == 1u && env.shutdowns == 1u && env.eof == 1u && env.received == (mode == ACK_EOF ? 5u : 12u));
         else if (mode == LATE_METHOD || mode == LATE_REPLY) CHECK(env.open_status == SOLARIS_ETIMEDOUT && env.close_status == SOLARIS_ETIMEDOUT);
+        else if (mode == AUTH_CLOSE) CHECK(env.open_status == SOLARIS_EACCESS && env.close_status == SOLARIS_EACCESS);
         else if (mode == PARTIAL_EOF) CHECK(env.open_status == SOLARIS_EIO && env.close_status == SOLARIS_EIO);
         else if (mode == STOP_APP) CHECK(env.close_status == SOLARIS_ECANCELLED);
         else if (mode == ALLOCATE) CHECK(env.close_status == SOLARIS_OK || env.close_status == SOLARIS_ENOMEM);

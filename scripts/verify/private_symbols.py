@@ -2,6 +2,7 @@
 """Ensure a C dependency archive exposes only its assigned private namespace."""
 import argparse
 import subprocess
+import sys
 
 
 def main():
@@ -22,8 +23,13 @@ def main():
     # Mach-O emits this with an extra ABI underscore; normalize only this
     # exact compiler symbol so dependency functions still require a prefix.
     instrumentation = 'asan_globals_registered'
+    # MSVC emits these UCRT inline definitions into objects using fprintf.
+    # They are runtime symbols, not llhttp entry points. Keep the COFF list exact.
+    crt_symbols = {'?_OptionsStorage@?1??__local_stdio_printf_options@@9@9',
+                   '_local_stdio_printf_options', 'fprintf', 'vfprintf_l'} if sys.platform == 'win32' else set()
     unexpected = sorted(symbol for symbol in symbols
-                        if not symbol.startswith(args.prefix + '_') and symbol.lstrip('_') != instrumentation)
+                        if not symbol.startswith(args.prefix + '_') and symbol.lstrip('_') != instrumentation
+                        and symbol not in crt_symbols)
     if unexpected:
         raise SystemExit('Unprefixed dependency globals: ' + ', '.join(unexpected))
     count = sum(symbol.startswith(args.prefix + '_') for symbol in symbols)

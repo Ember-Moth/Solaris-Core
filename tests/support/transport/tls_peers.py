@@ -53,7 +53,7 @@ def main():
                 secured = contexts[1 if mode == 1 else 0].wrap_socket(conn, server_side=True)
                 if mode == 3:
                     # Deliberately omit close_notify, even though handshake succeeded.
-                    os.close(secured.detach())
+                    socket.close(secured.detach())
                     return
                 received = bytearray()
                 while True:

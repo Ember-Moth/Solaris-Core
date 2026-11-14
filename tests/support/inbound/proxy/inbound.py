@@ -173,6 +173,9 @@ class Peer:
 
 
 def echo(conn):
+    # Existing sessions must survive listener removal while the test probes each
+    # closed port. Winsock can take several seconds to refuse those connects.
+    conn.settimeout(30)
     while True:
         data = conn.recv(65536)
         if not data:

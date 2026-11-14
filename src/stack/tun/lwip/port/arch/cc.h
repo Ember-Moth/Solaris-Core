@@ -13,6 +13,8 @@ typedef intptr_t ssize_t;
 #define SSIZE_MAX INTPTR_MAX
 #endif
 #define LWIP_NO_UNISTD_H 1
+#define PACK_STRUCT_BEGIN __pragma(pack(push, 1))
+#define PACK_STRUCT_END __pragma(pack(pop))
 #endif
 #include <stdio.h>
 #include <stdlib.h>
